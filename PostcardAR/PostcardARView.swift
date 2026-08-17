@@ -4,16 +4,13 @@
 //
 //  Camera view that finds printed cards and stands a 3D model on each of them.
 //
-//  Every reference image in the AR resource group is one card. Its `AnchorEntity(.image)` is
-//  purely a pose source — ARKit rewrites its transform every frame — and is not itself in the
-//  visible tree, so a card going untracked (occluded by a hand, say) does not hide anything:
+//  Every reference image in the AR resource group is one card:
 //
 //      worldRoot (static)     one shared anchor, added once, never rewritten
-//        └── pivot            we write a filtered world pose here, only while the card is tracked
+//        └── pivot            filtered world pose, written only while the card is tracked
 //              └── model      <image name>.usdz, scaled to that card at load time
 //
-//      AnchorEntity(.image)   ARKit rewrites this every frame with that card's raw pose;
-//                             read from, never parented to, never written to
+//      AnchorEntity(.image)   ARKit's raw per-frame pose — read from, never written to
 //
 //  ARKit owns the anchors, we own the pivots, and nothing else touches either. All of it runs on
 //  the main thread: the render loop fires there, and the session delegate uses the main queue
@@ -50,20 +47,11 @@ private let positionDeadBand: Float = 0.001         // metres
 private let rotationDeadBand: Float = 2 * .pi / 180 // radians
 private let smoothingFactor: Float = 0.15
 
-/// How long a card can go untracked — occluded or off camera, ARKit can't tell the two apart —
-/// before its model hides. Below this, occlusion (a hand passing over the card) is invisible on
-/// screen, which is the point. Above it, a card that has actually left the frame stops leaving
-/// its model floating behind. See "Tracking loss" in `docs/tracking.md`.
-private let holdAfterLoss: TimeInterval = 0.3
-
-/// Pinch pickup, applied in `updatePinchDetection()` / `attemptGrab(at:)` / `updateFadingSnails()`.
-/// Hand-pose sampling rate — slower than the render loop on purpose, see `updatePinchDetection()`.
+/// Hand-pose sampling rate, deliberately slower than the render loop — see `updatePinchDetection()`.
 private let handPoseSampleInterval: TimeInterval = 1.0 / 15.0
 
-/// Thumb-to-index distance, normalized by hand size, below which a pinch counts as closed /
-/// above which it counts as open. Two thresholds rather than one to avoid chatter at the edge.
-/// Tune against `status.pinchRatio` on screen — read the number with fingers apart and fingers
-/// actually touching, and set these somewhere between the two.
+/// Thumb-to-index distance (normalized by hand size) marking closed/open. Two thresholds, not
+/// one, to avoid chatter right at the pinch boundary.
 private let pinchCloseRatio: Float = 0.12
 private let pinchOpenRatio: Float = 0.2
 
@@ -76,10 +64,8 @@ private let pinchPickRadius: CGFloat = 80
 /// Per-frame opacity step for a released snail — ~0.4 s fade at ~60 fps.
 private let pinchFadeStep: Float = 1.0 / 24.0
 
-/// If a pinch is closed (something's held) and Vision stops confidently seeing a hand for this
-/// long, force a release rather than leaving the snail stuck held forever — a hand that lifts
-/// away from camera range after grabbing is common, and would otherwise never produce the
-/// "opened" sample that `evaluatePinch` needs to let go.
+/// If something's held and Vision loses the hand for this long, force a release — otherwise a
+/// hand that lifts out of frame mid-grab never produces the "opened" sample to let go with.
 private let handPoseLossTimeout: TimeInterval = 0.3
 
 // MARK: - Status
@@ -101,16 +87,11 @@ final class ARStatus {
     /// the next.
     var errors: [String] = []
 
-    /// Screen point of the most recent pinch sample, for the crosshair overlay. `nil` while no
-    /// hand is confidently in view.
+    /// Screen point of the crosshair overlay; `nil` while no hand is confidently in view.
     var pinchPoint: CGPoint?
 
     /// How closed the current pinch is, `0` (open) to `1` (closed) — drives the crosshair's ring.
     var pinchProgress: Float = 0
-
-    /// The raw thumb/index ratio behind `pinchProgress`, before clamping — read this against
-    /// `pinchCloseRatio`/`pinchOpenRatio` in `PostcardARView.swift` to tune them.
-    var pinchRatio: Float?
 }
 
 // MARK: - View
@@ -128,9 +109,8 @@ struct PostcardARView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> ARView {
-        // `automaticallyConfigureSession` would helpfully replace our configuration with
-        // ARView's default world-tracking one — plane detection, environment texturing, and its
-        // own schedule, none of which we want.
+        // `automaticallyConfigureSession` would helpfully replace our configuration with its own
+        // default one — plane detection, environment texturing, none of which we want.
         let arView = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
         context.coordinator.start(in: arView)
         return arView
@@ -170,17 +150,13 @@ extension PostcardARView {
             let anchor: AnchorEntity
 
             /// Ours. A plain `Entity` has no anchoring component, so what we write to it stays.
-            /// Parented to the shared `worldRoot`, not to `anchor` — so it keeps rendering at its
-            /// last pose even while the card is occluded, instead of vanishing with the anchor.
-             let pivot: Entity
+            /// Parented to the shared `worldRoot`, not to `anchor` — keeps rendering at its last
+            /// pose while the card is occluded, instead of vanishing with the anchor.
+            let pivot: Entity
 
-            /// Where this card's model is currently being held, in world space.
-            ///
-            /// Kept here rather than read back off `pivot`, so a re-detected pose is compared
-            /// against our own last output rather than against whatever `pivot` still shows.
-            ///
-            /// Left as-is while the card is untracked (occlusion or leaving frame): the next
-            /// tracked pose glides in from here like any other movement, rather than snapping.
+            /// Where this card's model is currently being held, in world space. Compared against
+            /// on re-detection instead of read back off `pivot`, and left untouched on tracking
+            /// loss so the next pose glides in like any other movement, rather than snapping.
             var heldPose: Transform?
         }
 
@@ -219,15 +195,13 @@ extension PostcardARView {
         /// Debounced open/closed pinch state — see `pinchCloseRatio`/`pinchOpenRatio`.
         private var pinchClosed = false
 
-        /// Last time a sample confidently saw a hand — the clock `handPoseLossTimeout` counts
-        /// against.
+        /// Last time a sample confidently saw a hand — what `handPoseLossTimeout` counts against.
         private var lastConfidentHandTime = Date.distantPast
 
         /// Screen point of the most recent pinch sample; drag reuses it between samples.
         private var pinchPoint: CGPoint?
 
-        /// `.soft` — firm grab, gentle let-go. `prepare()`d as the pinch starts closing to hide
-        /// Taptic Engine spin-up latency.
+        /// `.soft` — firm grab, gentle let-go. `prepare()`d early to hide Taptic spin-up latency.
         private var pinchHaptics: UIImpactFeedbackGenerator?
 
         init(status: ARStatus) {
@@ -242,11 +216,9 @@ extension PostcardARView {
                 return
             }
 
-            // World tracking, not image tracking: image tracking has no world origin, so a
-            // card's pose comes back relative to the current camera view rather than the room —
-            // panning past a stationary card reads to the filter as the card moving. World
-            // tracking gives the image anchor a room-fixed pose, so a still card is a still
-            // target. See "The session and its configuration" in docs/tracking.md.
+            // World tracking, not image tracking: image tracking has no world origin, so panning
+            // past a stationary card reads to the filter as the card moving. World tracking gives
+            // the image anchor a room-fixed pose instead. See docs/tracking.md.
             let referenceImages = ARReferenceImage.referenceImages(
                 inGroupNamed: resourceGroupName,
                 bundle: nil
@@ -259,9 +231,8 @@ extension PostcardARView {
 
             let configuration = ARWorldTrackingConfiguration()
             configuration.detectionImages = referenceImages
-            // Required, not cosmetic: this defaults to 0 on ARWorldTrackingConfiguration, under
-            // which a detected image is posed once and frozen there — the exact "anchor left
-            // where the card used to be" failure image tracking was originally chosen to avoid.
+            // Required, not cosmetic: defaults to 0, under which a detected image is posed once
+            // and frozen — the exact failure image tracking was chosen to avoid.
             configuration.maximumNumberOfTrackedImages = referenceImages.count
 
             arView.session.delegate = self // For errors only — see the note on the render loop.
@@ -271,8 +242,7 @@ extension PostcardARView {
             pinchHaptics = UIImpactFeedbackGenerator(style: .soft, view: arView)
 
             // Fixed at the world origin and never rewritten — a static parent so pivots stay in
-            // the visible tree even when their own image anchor goes untracked. See the note on
-            // `AnchorEntity` in `hold(_:)`: this is never written to, only ever parented under.
+            // the visible tree even when their own image anchor goes untracked.
             let worldRoot = AnchorEntity(world: .zero)
             arView.scene.addAnchor(worldRoot)
 
@@ -341,10 +311,9 @@ extension PostcardARView {
             var detected: [String] = []
 
             for index in cards.indices {
-                // While untracked (occluded, or off camera) the pivot is simply left alone: it
-                // keeps rendering at `heldPose`, because it lives under `worldRoot` rather than
-                // under this card's own anchor. `isAnchored` still drives the status label, so
-                // the label can say "not detected" while the model keeps holding its place.
+                // While untracked, the pivot is simply left alone — it keeps rendering at
+                // `heldPose` since it lives under `worldRoot`, not this card's own anchor. The
+                // label can say "not detected" while the model keeps holding its place.
                 guard cards[index].anchor.isAnchored else { continue }
 
                 detected.append(cards[index].name)
@@ -418,11 +387,8 @@ extension PostcardARView {
         // MARK: Pinch pickup
 
         /// Samples the camera for a hand pinch, at most once every `handPoseSampleInterval`.
-        ///
-        /// Reads `session.currentFrame` here, in the render loop, rather than in
-        /// `session(_:didUpdate frame:)` — same ARFrame-retention reason as the pose filter above.
-        /// Only `capturedImage` is carried into the `Task`, never the `ARFrame` itself. Inference
-        /// runs off the main thread (`perform(on:orientation:)` isn't `@MainActor`).
+        /// Reads `session.currentFrame` from the render loop, same ARFrame-retention reason as
+        /// the pose filter above — only `capturedImage` crosses into the `Task`, never the frame.
         private func updatePinchDetection() {
             guard !handPoseTaskInFlight,
                   Date().timeIntervalSince(lastHandPoseSampleTime) >= handPoseSampleInterval,
@@ -437,18 +403,14 @@ extension PostcardARView {
             let orientation = arView.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
             let displayTransform = frame.displayTransform(for: orientation, viewportSize: viewportSize)
 
-            // @MainActor so every mutation below lands on the same thread `onRenderFrame` runs
-            // on, with no hop back required — `perform(on:orientation:)` still suspends this off
-            // the main actor for the actual inference, since it isn't itself `@MainActor`.
+            // @MainActor so mutations below land on the same thread `onRenderFrame` runs on;
+            // `perform(on:orientation:)` still suspends off it for the actual inference.
             Task { @MainActor in
                 defer { handPoseTaskInFlight = false }
 
-                // No orientation hint here — Vision then leaves joint positions in the raw
-                // `capturedImage` buffer's own coordinate space, which is exactly what
-                // `displayTransform(for:viewportSize:)` below expects. Passing an orientation
-                // hint would have Vision hand back *already-rotated* coordinates, and applying
-                // `displayTransform` to those double-rotates the point — that was the bug behind
-                // the crosshair landing anywhere but the pinch.
+                // No orientation hint — Vision then leaves joints in `capturedImage`'s own
+                // coordinate space, which is what `displayTransform` below expects. A hint would
+                // hand back already-rotated coordinates and double-rotate the point.
                 guard
                     let hand = try? await handPoseRequest.perform(on: pixelBuffer).first,
                     let thumb = hand.joint(for: .thumbTip), thumb.confidence > jointConfidenceMinimum,
@@ -456,9 +418,9 @@ extension PostcardARView {
                     let wrist = hand.joint(for: .wrist), wrist.confidence > jointConfidenceMinimum,
                     let knuckle = hand.joint(for: .indexMCP), knuckle.confidence > jointConfidenceMinimum
                 else {
-                    // No confident hand this sample. Hide the crosshair immediately, but only
-                    // force a held snail's release after it's been missing a little while — a
-                    // single dropped sample mid-hold shouldn't drop the snail.
+                    // No confident hand this sample. Hide the crosshair immediately; a held
+                    // snail only force-releases after `handPoseLossTimeout`, so one dropped
+                    // sample mid-hold doesn't drop it.
                     status.pinchPoint = nil
                     if pinchClosed, Date().timeIntervalSince(lastConfidentHandTime) >= handPoseLossTimeout {
                         pinchClosed = false
@@ -488,13 +450,11 @@ extension PostcardARView {
             }
         }
 
-        /// Debounces one hand-pose sample into a grab or a release, and feeds the crosshair
-        /// overlay: `status.pinchPoint` positions it, `status.pinchProgress` fills its ring —
-        /// `0` at `pinchOpenRatio` or above, `1` at `pinchCloseRatio` or below.
+        /// Debounces one hand-pose sample into a grab or release, and drives the crosshair
+        /// overlay's position and ring fill.
         private func evaluatePinch(ratio: Float, at point: CGPoint) {
             pinchPoint = point
             status.pinchPoint = point
-            status.pinchRatio = ratio
             status.pinchProgress = min(max((pinchOpenRatio - ratio) / (pinchOpenRatio - pinchCloseRatio), 0), 1)
 
             if !pinchClosed, ratio < pinchOpenRatio {
@@ -510,9 +470,8 @@ extension PostcardARView {
             }
         }
 
-        /// Picks the nearest snail to the pinch point by projected screen position — not a hit
-        /// test, which needs collision shapes and would return the wrong node in the hierarchy.
-        /// No-op if something's already held.
+        /// Picks the nearest snail to the pinch point by projected screen position, not a hit
+        /// test (needs collision shapes, wrong node in the hierarchy). No-op if already holding.
         private func attemptGrab(at point: CGPoint) {
             guard held == nil, let arView, let cameraTransform = arView.session.currentFrame?.camera.transform
             else { return }
@@ -533,9 +492,8 @@ extension PostcardARView {
             pinchHaptics?.impactOccurred()
         }
 
-        /// Moves the held snail to the last known pinch point every rendered frame, regardless of
-        /// how often a new sample arrives — same idiom as `hold(_:)`. Depth stays fixed from grab
-        /// time, so the snail tracks the screen at a constant distance rather than the ray depth.
+        /// Moves the held snail to the last pinch point every rendered frame — same idiom as
+        /// `hold(_:)`. Depth stays fixed from grab time, so it tracks the screen at constant depth.
         private func updateHeldSnail() {
             guard let (entity, depth) = held, let point = pinchPoint,
                   let arView, let ray = arView.ray(through: point)
@@ -581,7 +539,7 @@ extension PostcardARView {
                         let model = try await Entity(named: card.name)
                         removeCameras(from: model)
                         fit(model, toCardWidth: card.width, named: card.name)
-                        card.pivot.addChild(model)  
+                        card.pivot.addChild(model)
                         snails.append(contentsOf: collectSnails(in: model))
                         status.loadedModels += 1
                     } catch {

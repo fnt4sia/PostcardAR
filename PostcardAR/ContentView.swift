@@ -62,14 +62,6 @@ private struct ScannerScreen: View {
                  waiting: "Loading models (\(status.loadedModels)/\(status.totalImages))…",
                  icon: "clock")
 
-            // For tuning `pinchCloseRatio`/`pinchOpenRatio` in PostcardARView.swift against a
-            // real hand — remove once those are dialed in.
-            if let ratio = status.pinchRatio {
-                Text("Pinch ratio: \(ratio, specifier: "%.2f")")
-                    .font(.caption)
-                    .foregroundStyle(.yellow)
-            }
-
             ForEach(status.errors, id: \.self) { message in
                 Text(message)
                     .font(.caption)
@@ -89,9 +81,7 @@ private struct ScannerScreen: View {
     }
 }
 
-/// Where the pinch is landing, and how closed it currently is. `position(_:)` in `ScannerScreen`
-/// places this at `status.pinchPoint`, a screen point already in this view's own coordinate
-/// space since `PostcardARView` fills the screen.
+/// Where the pinch is landing, and how closed it currently is.
 private struct PinchCrosshair: View {
     let progress: Float
 
