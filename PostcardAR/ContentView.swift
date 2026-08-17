@@ -22,7 +22,11 @@ struct ContentView: View {
     }
 }
 
-/// The camera screen, plus an overlay saying whether the postcard is currently detected.
+/// The camera, full screen, with a status panel over it.
+///
+/// `status` is created here and handed down. It is the only channel out of the AR view: the
+/// coordinator writes to it, and reading a property in `body` is what subscribes this view to
+/// changes in that property.
 private struct ScannerScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var status = ARStatus()
@@ -38,22 +42,22 @@ private struct ScannerScreen: View {
             }
     }
 
+    /// Detection and model loading are reported separately, because when nothing shows up the
+    /// question is always which of the two failed. Both are counts now that the group can hold
+    /// several cards: which ones are on camera, and how many of their models have arrived.
     private var statusPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(
-                status.isImageDetected ? "Postcard detected" : "Looking for postcard…",
-                systemImage: status.isImageDetected ? "checkmark.circle.fill" : "viewfinder"
-            )
-            .foregroundStyle(status.isImageDetected ? .green : .white)
+            line(!status.detectedImages.isEmpty,
+                 done: "Detected: \(status.detectedImages.joined(separator: ", "))",
+                 waiting: "Looking for a card…", icon: "viewfinder")
 
-            Label(
-                status.isModelLoaded ? "Model loaded" : "Loading model…",
-                systemImage: status.isModelLoaded ? "checkmark.circle.fill" : "clock"
-            )
-            .foregroundStyle(status.isModelLoaded ? .green : .white)
+            line(status.totalImages > 0 && status.loadedModels == status.totalImages,
+                 done: "Models loaded (\(status.loadedModels))",
+                 waiting: "Loading models (\(status.loadedModels)/\(status.totalImages))…",
+                 icon: "clock")
 
-            if let errorMessage = status.errorMessage {
-                Text(errorMessage)
+            ForEach(status.errors, id: \.self) { message in
+                Text(message)
                     .font(.caption)
                     .foregroundStyle(.red)
             }
@@ -63,6 +67,11 @@ private struct ScannerScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.black.opacity(0.6), in: .rect(cornerRadius: 12))
         .padding()
+    }
+
+    private func line(_ isDone: Bool, done: String, waiting: String, icon: String) -> some View {
+        Label(isDone ? done : waiting, systemImage: isDone ? "checkmark.circle.fill" : icon)
+            .foregroundStyle(isDone ? Color.green : .white)
     }
 }
 
