@@ -44,7 +44,7 @@ private let modelWidthRelativeToCard: Float = 1.0
 ///
 /// The dead bands are what stop the idle shiver — reach for those first. Lowering
 /// `smoothingFactor` calms real movement instead, at the cost of lag.
-private let positionDeadBand: Float = 0.002         // metres
+private let positionDeadBand: Float = 0.001         // metres
 private let rotationDeadBand: Float = 2 * .pi / 180 // radians
 private let smoothingFactor: Float = 0.15
 
