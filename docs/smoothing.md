@@ -107,9 +107,10 @@ does:
 | A 50 cm jump in one frame | Closed to within 5 mm in 29 frames, about 480 ms |
 
 An 8 cm *per-frame* delta means the card is moving at nearly 5 m/s, which is not handling, it is
-throwing. In practice only re-detection produces a jump that large — and re-detection is already
-handled, because `heldPose` is cleared on tracking loss and the next pose is taken outright
-rather than glided to.
+throwing. In practice only re-detection produces a jump that large, and a 50 cm jump on
+re-detection already glides in cleanly per the table above — `heldPose` survives tracking loss
+(see [tracking.md](tracking.md#tracking-loss)) precisely so re-detection is just another glide,
+not a special case.
 
 So the third regime was two constants and a branch that bought nothing. If a fly-in ever does
 show up on screen, the fix is to restore it, not to lower `smoothingFactor`.

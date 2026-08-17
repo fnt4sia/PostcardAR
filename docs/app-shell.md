@@ -256,10 +256,11 @@ sequenceDiagram
     UI->>UI: body recomputes
 ```
 
-The status list is published from the render-loop handler, so it and the models are reading the
-same thing on the same frame and cannot disagree. `Entity.isAnchored` is precisely "RealityKit is
-currently drawing this anchor's children", which is the question the user is actually asking when
-they look at the label.
+`Entity.isAnchored` is precisely "ARKit is tracking this card right now" — the label answers that
+question exactly. The model does not: it keeps rendering at its last held pose while a card goes
+untracked (occluded, say), rather than disappearing with the label — see "Tracking loss" in
+[tracking.md](tracking.md). The two are allowed to disagree by design: the label reports live
+tracking, the model stays put through a brief loss of it.
 
 One detail that matters at 60 fps:
 

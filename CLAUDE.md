@@ -65,9 +65,12 @@ One branch per reference image, all added to the scene up front. An image anchor
 until ARKit tracks its image, so cards that are not on camera cost nothing.
 
 ```
-AnchorEntity(.image)   <- ARKit rewrites this transform every frame. Never modify it.
-  └── pivot            <- we write a smoothed world pose here, every rendered frame
+worldRoot (static)     <- AnchorEntity(world: .zero), added once, never written to
+  └── pivot            <- we write a smoothed world pose here, only while the card is tracked
         └── model      <- <image name>.usdz, animations play here
+
+AnchorEntity(.image)   <- ARKit rewrites this transform every frame. Never modify it, never
+                          parent anything visible under it — see "Tracking loss" below.
 ```
 
 The `Coordinator` keeps these in a `cards` array of `Card` structs — name, printed width,
@@ -101,10 +104,14 @@ of the card's surface.
 
 ## Tracking loss
 
-Not handled in code. RealityKit stops drawing an `.image` anchor's children when that card is
-not tracked, which is the wanted behaviour, and `Entity.isAnchored` reports it for the UI
-label. On reappearance the card's `heldPose` is nil, so the pose is taken outright instead of
-glided to. All of this is per card: losing one leaves the others alone.
+Each card's `pivot` hangs off one shared, static `worldRoot` anchor rather than off that card's
+own image anchor — so RealityKit's "hide an untracked anchor's children" behaviour never reaches
+the model. The render loop just stops writing that card's `pivot` while it is untracked
+(occluded by a hand, off camera), and it holds its last pose. `heldPose` is left alone too, so
+whenever tracking resumes the new pose glides in from there like any other movement — no special
+case for reappearance. `Entity.isAnchored` still drives the status label directly, so the label
+can say "not detected" while the model keeps holding its place; that disagreement is intentional,
+not a bug — see `docs/tracking.md`. All of this is per card: losing one leaves the others alone.
 
 ## Render loop, not session delegate
 
@@ -143,13 +150,14 @@ from feeling mushy. Three constants, at the top of `PostcardARView.swift`; stead
 means a larger dead band or a smaller smoothing factor.
 
 There is deliberately no third "snap" regime for large jumps. `smoothingFactor` of 0.15 at 60 fps
-closes a 50 cm jump in about half a second, and the case that would need instant application —
-the card reappearing somewhere new — is already covered by `heldPose` being cleared on tracking
-loss, which makes the next pose land outright.
+closes a 50 cm jump in about half a second, which is fast enough that even a card reappearing
+somewhere new just glides there — see "Tracking loss" above for why `heldPose` survives loss
+rather than being cleared.
 
-`ARStatus.detectedImages` is rebuilt each frame from `anchor.isAnchored`, so the label and the
-models always agree. Guard that write with an inequality check: `@Observable` notifies on every
-set without comparing, and this runs once a frame.
+`ARStatus.detectedImages` is rebuilt each frame from `anchor.isAnchored` — live tracking state,
+not what's on screen. The model itself can lag behind that label during a brief occlusion by
+design. Guard the write with an inequality check regardless: `@Observable` notifies on every set
+without comparing, and this runs once a frame.
 
 ## Status
 

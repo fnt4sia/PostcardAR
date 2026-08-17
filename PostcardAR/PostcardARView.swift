@@ -4,12 +4,16 @@
 //
 //  Camera view that finds printed cards and stands a 3D model on each of them.
 //
-//  Every reference image in the AR resource group is one card, and each card owns a branch of
-//  the scene:
+//  Every reference image in the AR resource group is one card. Its `AnchorEntity(.image)` is
+//  purely a pose source — ARKit rewrites its transform every frame — and is not itself in the
+//  visible tree, so a card going untracked (occluded by a hand, say) does not hide anything:
 //
-//      AnchorEntity(.image)   ARKit rewrites this every frame with that card's raw pose
-//        └── pivot            we write a filtered pose here, every rendered frame
+//      worldRoot (static)     one shared anchor, added once, never rewritten
+//        └── pivot            we write a filtered world pose here, only while the card is tracked
 //              └── model      <image name>.usdz, scaled to that card at load time
+//
+//      AnchorEntity(.image)   ARKit rewrites this every frame with that card's raw pose;
+//                             read from, never parented to, never written to
 //
 //  ARKit owns the anchors, we own the pivots, and nothing else touches either. All of it runs on
 //  the main thread: the render loop fires there, and the session delegate uses the main queue
@@ -119,19 +123,18 @@ extension PostcardARView {
             /// and the model ends up pinned at the origin, which on screen reads as a freeze.
             let anchor: AnchorEntity
 
-            /// Ours. A plain `Entity` has no anchoring component, so what we write to it stays,
-            /// and the model inherits the filtered pose instead of the raw one.
+            /// Ours. A plain `Entity` has no anchoring component, so what we write to it stays.
+            /// Parented to the shared `worldRoot`, not to `anchor` — so it keeps rendering at its
+            /// last pose even while the card is occluded, instead of vanishing with the anchor.
             let pivot: Entity
 
             /// Where this card's model is currently being held, in world space.
             ///
-            /// Kept here rather than read back off `pivot`, because the pivot is a child of the
-            /// jittering anchor: its world transform moves with the card on any frame we do not
-            /// steer it. Reading it back would compare each new pose against noise rather than
-            /// against our own last output.
+            /// Kept here rather than read back off `pivot`, so a re-detected pose is compared
+            /// against our own last output rather than against whatever `pivot` still shows.
             ///
-            /// Cleared on tracking loss, so the card's next appearance is taken outright instead
-            /// of glided to from wherever the card used to be.
+            /// Left as-is while the card is untracked (occlusion or leaving frame): the next
+            /// tracked pose glides in from here like any other movement, rather than snapping.
             var heldPose: Transform?
         }
 
@@ -177,6 +180,12 @@ extension PostcardARView {
             arView.session.delegate = self // For errors only — see the note on the render loop.
             arView.session.run(configuration)
 
+            // Fixed at the world origin and never rewritten — a static parent so pivots stay in
+            // the visible tree even when their own image anchor goes untracked. See the note on
+            // `AnchorEntity` in `hold(_:)`: this is never written to, only ever parented under.
+            let worldRoot = AnchorEntity(world: .zero)
+            arView.scene.addAnchor(worldRoot)
+
             // Every anchor goes in up front. An image anchor draws nothing and costs nothing
             // until ARKit tracks its image, so the ones not on camera are free.
             //
@@ -188,7 +197,7 @@ extension PostcardARView {
 
                 let anchor = AnchorEntity(.image(group: resourceGroupName, name: name))
                 let pivot = Entity()
-                anchor.addChild(pivot)
+                worldRoot.addChild(pivot)
                 arView.scene.addAnchor(anchor)
 
                 cards.append(Card(
@@ -242,13 +251,11 @@ extension PostcardARView {
             var detected: [String] = []
 
             for index in cards.indices {
-                // RealityKit stops drawing an image anchor's children whenever its card is not
-                // tracked — which is the behaviour we want, and needs no code. `isAnchored`
-                // reports that same state, so the label and the models can never disagree.
-                guard cards[index].anchor.isAnchored else {
-                    cards[index].heldPose = nil
-                    continue
-                }
+                // While untracked (occluded, or off camera) the pivot is simply left alone: it
+                // keeps rendering at `heldPose`, because it lives under `worldRoot` rather than
+                // under this card's own anchor. `isAnchored` still drives the status label, so
+                // the label can say "not detected" while the model keeps holding its place.
+                guard cards[index].anchor.isAnchored else { continue }
 
                 detected.append(cards[index].name)
                 hold(&cards[index])
