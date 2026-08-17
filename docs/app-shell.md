@@ -102,6 +102,8 @@ final class ARStatus {
     var loadedModels = 0
     var totalImages = 0
     var errors: [String] = []
+    var pinchPoint: CGPoint?
+    var pinchProgress: Float = 0
 }
 ```
 
@@ -181,7 +183,8 @@ presented view, so the screen can close itself without knowing who presented it 
 binding back to it.
 
 `.overlay` stacks a view on top of another, aligned within its frame — the same idea as `ZStack`,
-but anchored to this specific view's bounds.
+but anchored to this specific view's bounds. A third overlay places the pinch crosshair at
+`status.pinchPoint` the same way — see [interaction.md](interaction.md).
 
 ## Part 3 — Bridging to UIKit
 

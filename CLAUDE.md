@@ -10,7 +10,9 @@ one.
 3. RealityKit renders, on each tracked card, the `.usdz` in the bundle **named after that card's
    reference image** — `postcard` in the group draws `postcard.usdz`.
 4. The model stays attached to its card while the card is visible: move or tilt the card and the
-   model follows. There are no gestures on the model itself.
+   model follows.
+5. One gesture exists: pinch to pick up a `SeaSnail*` entity inside a model and drag it — see
+   `docs/interaction.md`. Nothing else on the model responds to touch.
 
 Adding a card is two files — an image in the resource group and a `.usdz` of the same name —
 and no code change. Nothing in the source names an individual card.
@@ -24,6 +26,7 @@ Everything is first-party Apple. No third-party dependencies.
 | App shell, button, presentation | SwiftUI |
 | Image detection and tracking | ARKit (`ARWorldTrackingConfiguration`, `detectionImages`) |
 | 3D rendering and anchoring | RealityKit (`ARView`, `AnchorEntity(.image)`) |
+| Hand-pose detection for pinch pickup | Vision (`DetectHumanHandPoseRequest`) |
 | 3D authoring and animation | Reality Composer Pro (bundled with Xcode) |
 
 `ARWorldTrackingConfiguration` is used rather than plain image tracking because image tracking
@@ -42,7 +45,7 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 | Path | Purpose |
 |---|---|
 | `PostcardAR/ContentView.swift` | Start button, and the camera screen's status overlay |
-| `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, and model loading |
+| `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and pinch pickup |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
 | `README.md` | What the project is, how to run it, how to add a card |
@@ -57,6 +60,7 @@ Documentation is split by area, and each file owns its topic:
 | `docs/tracking.md` | Session, anchors, entity hierarchy, render loop, tracking loss |
 | `docs/smoothing.md` | The dead band and glide filter, and its three constants |
 | `docs/app-shell.md` | SwiftUI, the `UIViewRepresentable` bridge, the status panel |
+| `docs/interaction.md` | Pinch pickup: Vision hand-pose sampling, grab/drag/release, tuning |
 | `docs/troubleshooting.md` | Symptom → cause, starting from the status panel |
 
 The Xcode target uses a synchronized folder group, so any file added under `PostcardAR/`
@@ -171,6 +175,16 @@ without comparing, and this runs once a frame.
 and `errors`. Errors are a list, not one string: with several models, a missing `.usdz` must not
 hide the next one. `report(_:)` drops repeats, because `didFailWithError` can fire on every
 frame and the panel is not a log.
+
+## Pinch pickup
+
+The one gesture: pinch to grab a `SeaSnail*` entity and drag it. Runs on Vision
+(`DetectHumanHandPoseRequest`), read from the same `capturedImage` ARKit is already tracking
+cards against, sampled at 15 Hz — independent of and slower than the 60 fps render loop, and
+guarded against overlapping inference. Grab is nearest-snail-by-screen-projection within
+`pinchPickRadius`, not a hit test; a held snail tracks the pinch point at fixed camera depth;
+release fades it out. Full mechanism, including the open/close debounce and the Vision
+coordinate-space gotcha, in `docs/interaction.md`.
 
 ## Model scale
 

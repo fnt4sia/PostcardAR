@@ -8,7 +8,7 @@ The camera screen has a panel in the top corner:
 
 | Line | Meaning |
 |---|---|
-| **Looking for a card…** / **Detected: `name`, `name`** | Which reference images RealityKit is currently drawing anchors for. Driven by `Entity.isAnchored`, read once per rendered frame, so the label and the models can never disagree. |
+| **Looking for a card…** / **Detected: `name`, `name`** | Which reference images ARKit is tracking *right now*, from `Entity.isAnchored`. The model can lag behind this during a brief occlusion — see "Tracking loss" in [tracking.md](tracking.md) — so the label going to "not detected" does not mean the model vanished. |
 | **Loading models (n/total)…** / **Models loaded (n)** | How many `.usdz` files have finished loading, one per reference image. |
 | Red text | An `ARSession` error, or a model that failed to load — named, one line each. |
 
@@ -104,6 +104,17 @@ loop instead — see the dead end at the end of [tracking.md](tracking.md).
 Model weight. Everything runs on the main thread alongside ARKit and SwiftUI, and every model in
 the group loads at launch and stays resident. Budget 512² textures and under ~50k triangles per
 model, and remember the budget is shared across cards — see "Weight" in [models.md](models.md).
+
+### Pinching does nothing, or grabs the wrong snail
+
+See [interaction.md](interaction.md) for the whole mechanism. In order of likelihood:
+
+1. `pinchCloseRatio`/`pinchOpenRatio` don't match your hand — these were tuned against one hand
+   at one distance from the camera. Widen the gap between them if the pinch feels unreliable.
+2. The pinch point landed more than `pinchPickRadius` screen points from every snail. Grabbing
+   is nearest-by-screen-position, not a hit test, so it can pick a snail behind the one you meant.
+3. Lighting or hand angle — Vision's hand-pose detector needs the hand clearly in frame, same as
+   ARKit needs the card clearly in frame.
 
 ### It does not run on the simulator
 

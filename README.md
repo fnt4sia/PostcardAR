@@ -1,15 +1,17 @@
 # PostcardAR
 
 An iOS app that recognises printed cards through the camera and stands a 3D model on each one.
-Hold a card up, move it, tilt it — its model stays attached.
+Hold a card up, move it, tilt it — its model stays attached. Pinch a small creature in the model
+and it comes along for the ride until you let go.
 
-Everything is first-party Apple: SwiftUI for the shell, ARKit for image tracking, RealityKit for
-rendering. No third-party dependencies, no package manager, four Swift files.
+Everything is first-party Apple: SwiftUI for the shell, ARKit for tracking, RealityKit for
+rendering, Vision for the pinch gesture. No third-party dependencies, no package manager, four
+Swift files.
 
 ## Requirements
 
 - **Xcode 26** or later.
-- **A real iPhone or iPad.** The simulator has no camera feed and image tracking reports itself
+- **A real iPhone or iPad.** The simulator has no camera feed and world tracking reports itself
   unsupported there; the app shows a message rather than crashing.
 - **A physically printed card.** Showing a target on another screen works but tracks noticeably
   worse because of glare and moiré.
@@ -70,20 +72,25 @@ own model and its own printed size.
 ## What it looks like inside
 
 ```
-AnchorEntity(.image)   ← ARKit rewrites this every frame with the card's raw pose
-  └── pivot            ← we write a smoothed pose here, every rendered frame
+worldRoot (static)     ← one shared anchor, added once, never rewritten
+  └── pivot            ← we write a smoothed world pose here, only while the card is tracked
         └── model      ← <image name>.usdz, scaled to that card at load time
+
+AnchorEntity(.image)   ← ARKit rewrites this every frame with the card's raw pose;
+                          read from, never written to
 ```
 
 One branch per reference image, all built at startup. ARKit re-solves each card's pose from
 scratch every frame, so the raw pose shivers; a dead-band filter on the pivot is what makes the
 models sit still. The anchors themselves are never written to — RealityKit overwrites any such
-write from the anchoring target, and the model appears frozen at the origin.
+write from the anchoring target, and the model appears frozen at the origin. The pivot hangs off
+a shared static anchor rather than the card's own, so a model keeps its last pose through a brief
+occlusion instead of vanishing with it — see [docs/tracking.md](docs/tracking.md).
 
 | Path | Purpose |
 |---|---|
 | `PostcardAR/ContentView.swift` | Start button, and the camera screen's status overlay |
-| `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, cards, filter, and model loading |
+| `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, cards, filter, model loading, and pinch pickup |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world size |
 | `PostcardAR/<name>.usdz` | The model for the card of that name |
 | `docs/` | Design notes, one file per area |
@@ -100,6 +107,7 @@ The camera permission string lives in the build settings as
 | [docs/tracking.md](docs/tracking.md) | ARKit and RealityKit: the session, anchors, the entity hierarchy, the render loop |
 | [docs/smoothing.md](docs/smoothing.md) | Why the models hold still, and the three constants that tune it |
 | [docs/app-shell.md](docs/app-shell.md) | SwiftUI from scratch: views, state, the UIKit bridge, the status panel |
+| [docs/interaction.md](docs/interaction.md) | Pinch pickup: Vision hand-pose sampling, grab/drag/release |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom → cause, starting from the status panel |
 
 `CLAUDE.md` is the working agreement for AI-assisted changes to this repo — the invariants that
@@ -108,13 +116,15 @@ must not be broken, and the house rules.
 ## State
 
 Working: several cards tracked at once, each showing the `.usdz` of its own name, scaled to its
-own printed size, smoothed so it does not shiver, and disappearing when its card leaves the
-frame.
+own printed size, smoothed so it does not shiver, and holding its last pose through a brief
+occlusion rather than disappearing. Pinch pickup on `SeaSnail*` entities — see
+[docs/interaction.md](docs/interaction.md).
 
 Not implemented:
 
-- **A fade on tracking loss.** Models appear and disappear instantly. If that looks abrupt, fade
-  over a few frames rather than cutting.
-- **Gestures on the model** (pinch to scale, drag to spin independently of the card). Not
-  currently wanted. If added, write to the model entity or to a second pivot — never to the
-  anchor, and not to the existing pivot, whose world transform is rewritten every frame.
+- **A fade on tracking loss that lasts long enough to actually leave the frame.** Right now a
+  card that truly leaves — not just gets occluded — leaves its model in place indefinitely
+  rather than eventually fading it out.
+- **Pinch gestures on anything but `SeaSnail*` entities** (scaling or spinning the model itself,
+  say). If added, write to the model entity or a second pivot — never to the anchor, and not to
+  the existing pivot, whose world transform is rewritten every frame.

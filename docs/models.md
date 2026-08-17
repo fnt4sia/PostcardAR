@@ -80,11 +80,11 @@ it still lands correctly.
 ### The one dial
 
 ```swift
-private let modelWidthRelativeToCard: Float = 1.0
+private let modelWidthRelativeToCard: Float = 2.0
 ```
 
-`1.0` makes the model exactly as wide as its card. `0.5` half as wide, `2.0` twice as wide.
-Change that constant, not the model.
+`1.0` makes the model exactly as wide as its card; the current `2.0` makes it twice as wide.
+`0.5` would make it half as wide. Change that constant, not the model.
 
 It applies to every card, and re-exporting one `.usdz` bigger will *not* make that one model
 relatively larger: `fit` measures the model and normalises its authored scale away, which is the
