@@ -40,6 +40,12 @@ private struct ScannerScreen: View {
                     .buttonStyle(.borderedProminent)
                     .padding()
             }
+            .overlay(alignment: .topLeading) {
+                if let point = status.pinchPoint {
+                    PinchCrosshair(progress: status.pinchProgress)
+                        .position(point)
+                }
+            }
     }
 
     /// Detection and model loading are reported separately, because when nothing shows up the
@@ -55,6 +61,14 @@ private struct ScannerScreen: View {
                  done: "Models loaded (\(status.loadedModels))",
                  waiting: "Loading models (\(status.loadedModels)/\(status.totalImages))…",
                  icon: "clock")
+
+            // For tuning `pinchCloseRatio`/`pinchOpenRatio` in PostcardARView.swift against a
+            // real hand — remove once those are dialed in.
+            if let ratio = status.pinchRatio {
+                Text("Pinch ratio: \(ratio, specifier: "%.2f")")
+                    .font(.caption)
+                    .foregroundStyle(.yellow)
+            }
 
             ForEach(status.errors, id: \.self) { message in
                 Text(message)
@@ -72,6 +86,29 @@ private struct ScannerScreen: View {
     private func line(_ isDone: Bool, done: String, waiting: String, icon: String) -> some View {
         Label(isDone ? done : waiting, systemImage: isDone ? "checkmark.circle.fill" : icon)
             .foregroundStyle(isDone ? Color.green : .white)
+    }
+}
+
+/// Where the pinch is landing, and how closed it currently is. `position(_:)` in `ScannerScreen`
+/// places this at `status.pinchPoint`, a screen point already in this view's own coordinate
+/// space since `PostcardARView` fills the screen.
+private struct PinchCrosshair: View {
+    let progress: Float
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(.white.opacity(0.4), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: CGFloat(progress))
+                .stroke(Color.green, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90)) // start the ring at 12 o'clock, fill clockwise
+            Circle()
+                .fill(.white)
+                .frame(width: 6, height: 6)
+        }
+        .frame(width: 44, height: 44)
+        .animation(.easeOut(duration: 0.1), value: progress)
     }
 }
 

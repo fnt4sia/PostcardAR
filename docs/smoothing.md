@@ -121,7 +121,7 @@ All three constants sit at the top of `PostcardARView.swift` and apply to every 
 
 | Constant | Default | Raise it to… |
 |---|---|---|
-| `positionDeadBand` | 2 mm | Kill more positional shiver, at the cost of ignoring small real nudges |
+| `positionDeadBand` | 1 mm | Kill more positional shiver, at the cost of ignoring small real nudges |
 | `rotationDeadBand` | 2° | Kill more rotational shiver, same trade |
 | `smoothingFactor` | 0.15 | Track more responsively (**lower** it for a calmer, laggier model) |
 
