@@ -17,8 +17,8 @@ are; RealityKit puts pixels there.
 ## The session and its configuration
 
 ```swift
-let configuration = ARImageTrackingConfiguration()
-configuration.trackingImages = referenceImages
+let configuration = ARWorldTrackingConfiguration()
+configuration.detectionImages = referenceImages
 configuration.maximumNumberOfTrackedImages = referenceImages.count
 arView.session.run(configuration)
 ```
@@ -28,12 +28,20 @@ class you pick determines the whole behaviour:
 
 | Configuration | Behaviour |
 |---|---|
-| `ARWorldTrackingConfiguration` | Maps the room, tracks the device in it. Images can be detected once, then the anchor stays put in world space. |
-| `ARImageTrackingConfiguration` | Ignores the room entirely. Locates each image relative to the camera, every frame. |
+| `ARWorldTrackingConfiguration` | Maps the room via visual-inertial odometry, tracks the device in it. With `detectionImages` set and `maximumNumberOfTrackedImages` above 0, a detected image's anchor keeps updating every frame, room-fixed. |
+| `ARImageTrackingConfiguration` | Ignores the room entirely. Locates each image relative to the *camera*, fresh every frame, with no persistent sense of where the device itself is. |
 
-We use image tracking because the cards **move**. World tracking assumes what it detected stays
-where it was — correct for a poster on a wall, wrong for a card in your hand, which would leave
-the model floating where the card used to be.
+We use world tracking because plain image tracking has no world origin: a card's pose comes
+back relative to the current camera view, not the room. Panning the phone past a stationary
+card then reads to the smoothing filter as the card moving — the dead band never engages
+because the "held" pose keeps sliding with the camera, so the model visibly drags and only
+settles once the phone stops. World tracking's device pose (from the room map) factors that
+camera motion out, so a still card yields a still target.
+
+`maximumNumberOfTrackedImages` still has to be set explicitly and to the full count: it
+defaults to 0 on `ARWorldTrackingConfiguration`, under which a detected image is posed once and
+frozen there — the exact "anchor left where the card used to be" failure that ruled out plain
+world tracking (without continuous image detection) for cards held in the hand.
 
 `automaticallyConfigureSession = false` on the `ARView` stops it from helpfully replacing our
 configuration with its default world-tracking one.

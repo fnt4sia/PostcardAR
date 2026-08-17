@@ -107,7 +107,7 @@ model, and remember the budget is shared across cards — see "Weight" in [model
 
 ### It does not run on the simulator
 
-It cannot. There is no camera feed, `ARImageTrackingConfiguration.isSupported` is false, and the
+It cannot. There is no camera feed, `ARWorldTrackingConfiguration.isSupported` is false, and the
 app shows a message instead of crashing. AR needs a real device and a physically printed card.
 
 ### Xcode shows errors that the build does not

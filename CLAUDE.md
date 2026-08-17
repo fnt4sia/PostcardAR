@@ -22,14 +22,20 @@ Everything is first-party Apple. No third-party dependencies.
 | Piece | Framework |
 |---|---|
 | App shell, button, presentation | SwiftUI |
-| Image detection and tracking | ARKit (`ARImageTrackingConfiguration`) |
+| Image detection and tracking | ARKit (`ARWorldTrackingConfiguration`, `detectionImages`) |
 | 3D rendering and anchoring | RealityKit (`ARView`, `AnchorEntity(.image)`) |
 | 3D authoring and animation | Reality Composer Pro (bundled with Xcode) |
 
-`ARImageTrackingConfiguration` is used rather than world tracking because the cards are
-expected to be held in the hand. It re-tracks the images every frame instead of dropping a
-persistent world anchor that would drift. `maximumNumberOfTrackedImages` is set to the number
-of reference images in the group, so every card in view is posed in the same frame.
+`ARWorldTrackingConfiguration` is used rather than plain image tracking because image tracking
+has no world origin: a card's pose comes back relative to the current camera view, not the
+room, since ARKit runs no visual-inertial odometry under that configuration. Panning the phone
+past a stationary card then reads to the smoothing filter as the card moving — visible drift
+that only settles once the phone stops. World tracking gives the image anchor a room-fixed
+pose, so a still card yields a still target and the dead-band filter works as designed.
+`maximumNumberOfTrackedImages` must still be set explicitly to the number of reference images —
+it defaults to 0 on this configuration, under which a detected card is posed once and frozen
+there, the exact "anchor left where the card used to be" failure image tracking was originally
+chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 
 ## Layout
 

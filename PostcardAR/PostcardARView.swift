@@ -83,8 +83,9 @@ struct PostcardARView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> ARView {
-        // `automaticallyConfigureSession` would helpfully replace our image-tracking
-        // configuration with ARView's default world-tracking one.
+        // `automaticallyConfigureSession` would helpfully replace our configuration with
+        // ARView's default world-tracking one — plane detection, environment texturing, and its
+        // own schedule, none of which we want.
         let arView = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
         context.coordinator.start(in: arView)
         return arView
@@ -150,16 +151,19 @@ extension PostcardARView {
             self.status = status
         }
 
-        /// Starts image tracking, builds an `anchor -> pivot` branch per reference image, and
-        /// begins loading their models.
+        /// Starts tracking, builds an `anchor -> pivot` branch per reference image, and begins
+        /// loading their models.
         func start(in arView: ARView) {
-            guard ARImageTrackingConfiguration.isSupported else {
-                report("Image tracking needs a real device, not the simulator.")
+            guard ARWorldTrackingConfiguration.isSupported else {
+                report("World tracking needs a real device, not the simulator.")
                 return
             }
 
-            // Image tracking rather than world tracking, because the cards are held in the hand.
-            // World tracking would detect one once and leave the anchor where the card *was*.
+            // World tracking, not image tracking: image tracking has no world origin, so a
+            // card's pose comes back relative to the current camera view rather than the room —
+            // panning past a stationary card reads to the filter as the card moving. World
+            // tracking gives the image anchor a room-fixed pose, so a still card is a still
+            // target. See "The session and its configuration" in docs/tracking.md.
             let referenceImages = ARReferenceImage.referenceImages(
                 inGroupNamed: resourceGroupName,
                 bundle: nil
@@ -170,11 +174,11 @@ extension PostcardARView {
                 return
             }
 
-            let configuration = ARImageTrackingConfiguration()
-            configuration.trackingImages = referenceImages
-            // Allow every image in the group to be tracked in the same frame. ARKit keeps
-            // detecting past this limit; it just will not solve a pose for a further image until
-            // one of the tracked ones is lost.
+            let configuration = ARWorldTrackingConfiguration()
+            configuration.detectionImages = referenceImages
+            // Required, not cosmetic: this defaults to 0 on ARWorldTrackingConfiguration, under
+            // which a detected image is posed once and frozen there — the exact "anchor left
+            // where the card used to be" failure image tracking was originally chosen to avoid.
             configuration.maximumNumberOfTrackedImages = referenceImages.count
 
             arView.session.delegate = self // For errors only — see the note on the render loop.
