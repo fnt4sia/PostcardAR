@@ -31,14 +31,27 @@ runs on, with no explicit hop.
 
 ## Reading the pinch
 
-Four joints, gated in two separate places with two different strictness levels, not one shared
-list: thumb tip and index tip gate the point, but only need *one* of them confident, not both
-(`updatePinchDetection()`'s first real `guard`, past the no-hand check); wrist and index knuckle
-(`.indexMCP`) additionally gate `ratio`, needing both tips *and* both of themselves (a second
-`guard`, further down, after the point is already placed). See "Two guards, not one" and "One
-tip is enough for the point" below for why. A missing *joint* and a missing *hand* are handled
-differently too — see "Occlusion vs. no hand" — but either way, nothing usable this sample means
-whatever it gates isn't updated.
+Four joints, gated in two separate places, not one shared list: thumb tip and index tip gate the
+point, needing only *one* of them confident (`updatePinchDetection()`'s first real `guard`, past
+the no-hand check — mid-pinch the thumb sits on top of the index fingertip, so requiring both
+froze the point every time that tip dropped out); wrist and index knuckle (`.indexMCP`)
+additionally gate `ratio`, needing both tips *and* both of themselves, in a second `guard` placed
+*after* the point is already computed and drawn. The split matters because whatever joints feed a
+guard should be exactly the joints something downstream of it still uses — an earlier version
+gated all four together, so a low-confidence read on any one of them (most often the wrist, which
+sits nearer the frame edge at close range and reads less confidently than the fingertips do)
+silently dropped the ratio, release, and drag along with the point, which is why a held snail
+could freeze "stuck in the air": opening the hand to let go often reads one joint as
+low-confidence, killing the sample before release logic ever ran. `wrist`/`indexMCP` only measure
+a coarse hand-size reference, never a position that needs precision, so they're gated on the
+looser `handScaleJointConfidenceMinimum` instead of `jointConfidenceMinimum`.
+
+A present-but-unreadable hand (no confident tip this sample) is not the same event as no hand at
+all, and only "no hand" erases state: `hand == nil` clears `pinchPoint`, resets
+`pinchPointFilter`, and starts `handPoseLossTimeout`'s clock toward a forced release. A hand
+Vision saw but couldn't read well just holds the last `pinchPoint` and leaves the filter alone —
+clearing the point on every confidence dip was the other half of the "stuck in the air" bug,
+since `updateHeldSnail()` needs it to move the snail and only `releaseHeld()` clears `held`.
 
 **The ratio.** Thumb-to-index distance alone isn't usable — it shrinks as the hand moves away
 from the camera even with fingers held apart the same amount. Dividing by wrist-to-knuckle
@@ -57,71 +70,33 @@ That amplitude hysteresis alone isn't enough to call a release, though: a single
 (the thumb tip, mid-pinch, is exactly the geometry that hides it) can spike the ratio past
 `pinchOpenRatio` for one sample without the hand actually opening. Because release is
 unrecoverable — the snail is already in `fading`, `pinchOpenStreak` requires
-`pinchOpenConfirmSamples` *consecutive* open samples (~200 ms) before `releaseHeld()` actually
+`pinchOpenConfirmSamples` *consecutive* open samples (~133 ms) before `releaseHeld()` actually
 fires; any other sample resets the streak, so a still-closed hand never fades. This is a
 consecutive-sample counter, not a wall-clock window, deliberately — a window would treat the
 first sample after a stalled/skipped inference (see "Decoupled from the render loop" above) as
 having already been open that whole time.
 
-**Two guards, not one.** `updatePinchDetection()` used to gate all four joints together. That
-was a real bug, found the hard way: an earlier version also required `indexPIP` there (for a
-point-placement scheme since abandoned — see "The point" below), and once the point stopped
-using it, a low-confidence read on that now-irrelevant joint still silently dropped the *entire*
-sample — ratio, release, drag, all of it, not just the point. That's specifically why a held
-snail could freeze "stuck in the air" on release: opening the hand to let go sometimes reads
-`indexPIP` as low-confidence, which killed the sample before the release-ratio logic downstream
-ever ran. The general lesson — whatever joints feed a guard should be exactly the joints
-something *downstream of that guard* still uses, nothing gated "just in case" — applies beyond
-the joint that taught it: `wrist`/`indexMCP` are only ever `ratio`'s denominator, never the
-point, so they're now a second, separate `guard` placed *after* the point is computed and the
-crosshair moved. A wrist/knuckle confidence dip costs `ratio` for that one sample, never the
-point's responsiveness.
+`ratio` itself is computed from the *raw* `thumbJoint`/`indexJoint` positions, not the
+confidence-filtered ones — it only needs `anchorTip` to have established that at least one tip is
+genuinely confident this sample, the same trust argument the point uses. Requiring both tips
+individually confident made a fast release (which blurs both tips at once, being close together
+and moving together) rarely produce a usable ratio sample, so a released snail kept being dragged
+without ever collecting enough open samples to actually let go.
 
-That dip turned out not to be the rare case the first version of this section assumed — at
-close range (a hand held near the camera to pinch) the wrist sits nearer the frame edge and
-reads far less confidently than the fingertips routinely, not occasionally. Gated at
-`jointConfidenceMinimum` (the fingertip-precision bar), that meant `ratio` — and with it the
-ring and release — could silently stop updating for stretches while the point, needing only the
-still-confident fingertips, kept moving: ring stuck full, snail never releasing, looking frozen
-while the crosshair visibly wasn't. `handScaleJointConfidenceMinimum` is deliberately looser:
-`wrist`/`indexMCP` only measure a coarse hand-size reference here, never a position that needs
-to be precise, so they don't need the fingertip bar.
+**Forced release.** If a pinch is closed and Vision stops confidently seeing a hand for
+`handPoseLossTimeout`, the snail releases anyway — a hand that lifts out of frame mid-grab would
+otherwise never produce the "opened" sample `evaluatePinch` needs to let go with.
 
-**Occlusion vs. no hand.** `updatePinchDetection()` treats "Vision saw nothing at all" and
-"Vision saw a hand but can't read it well this sample" as different events, and only the first
-erases state. `hand == nil` is the real loss — `pinchPoint` is cleared (hides the crosshair),
-`pinchPointFilter` is reset to a fresh `PinchPointFilter()` (so re-acquiring doesn't smooth in
-from a stale position and derivative), and `lastHandSeenTime` is what `handPoseLossTimeout`
-counts against for a forced release. A present-but-unreadable hand — neither tip confident this
-sample, see "One tip is enough for the point" below — skips the update and holds the last
-`pinchPoint` *and* leaves `pinchPointFilter`'s state alone, the same dead-band idiom as the card
-pose filter. Clearing `pinchPoint` on a mere confidence dip was tried first and was the other
-half of the "stuck in the air" bug: `updateHeldSnail()` needs `pinchPoint` to move the snail, and
-only `releaseHeld()` clears `held` — so a held snail would freeze mid-drag on an occluded joint
-without ever actually being released.
-
-**One tip is enough for the point — and, now, for `ratio` too.** Requiring *both* `thumbTip` and
-`indexTip` confident to place the point at all was itself a smaller version of the same "Two
-guards, not one" mistake: mid-pinch, the thumb sits directly on top of the index fingertip, so
-`indexTip`'s confidence dropping out is the routine case during exactly the drag this gesture
-exists for — and requiring both meant the point froze for a full `handPoseSampleInterval`
-(~67 ms) *every time*, stacking up into exactly the "smooth when slow, sluggish when fast" feel:
-fast motion blurs a tip's read more often, so the faster the drag, the more of these ~67 ms
-freezes it hit. The point only needs *one* confident tip now — the midpoint when both are
-readable, that one tip's own position otherwise.
-
-`ratio` was left requiring both confident tips at first, on the reasoning that its distance
-calculation genuinely needs both positions and a stand-in would be a real accuracy loss, not
-just an unnecessary restriction. That held for `evaluatePinch`'s ratio math but missed the actual
-consequence: a fast release motion blurs *both* tips at once more often than it blurs one
-(they're close together and moving together), so "both confident" samples got rare during
-exactly the motion release depends on — `pinchOpenConfirmSamples` rarely got the consecutive
-reads it needed, and a `held` snail kept being dragged (the point still updated fine) without
-ever collecting enough open samples to release, reading as "floating" rather than frozen. `ratio`
-now computes off `thumbJoint`/`indexJoint` — the *raw* joints, regardless of their own
-confidence — once `anchorTip` has already established that at least one tip is genuinely
-confident this sample. That's the same trust argument the point relies on, extended to `ratio`:
-one confident tip vouching for the sample, not each value individually gated.
+That timeout counts against `lastPinchEvaluationTime` — the last time `evaluatePinch(ratio:at:)`
+actually ran — not "last time a sample saw a hand." An earlier version used the latter and the
+timeout never fired: every bail-out that checks it runs on a sample where a hand was *just* seen,
+so the elapsed time was always ~0 and the 0.3 s threshold could never be crossed, leaving a held
+snail stuck floating indefinitely. `lastPinchEvaluationTime` backs the two bail-outs that have no
+other evidence the hand is still there (no hand at all; neither tip readable). The third guard
+(wrist/knuckle, above) deliberately skips it: that one fails routinely during a genuine grip, not
+rarely, so a timeout keyed to it fired mid-drag on a hand that never left — tried, and it caused
+release-then-regrab looping, reading as the snail teleporting. The point staying responsive
+through that guard's failures is itself the evidence the hand hasn't gone anywhere.
 
 **The point.** `handPoseRequest.perform(on:orientation:)` is given an explicit orientation hint
 (`CGImagePropertyOrientation(rearCameraFor:)`), so Vision rotates internally and hands back
@@ -130,105 +105,62 @@ joint locations already in the *upright* image's coordinate space.
 `Joint.location` is `Vision.NormalizedPoint` — the new Swift Vision API's own type, not the
 plain `CGPoint` the old ObjC-bridged `VNRecognizedPoint.location` returned. It carries its own
 conversion, `toImageCoordinates(_:origin:)`, and `screenPoint(for:)` uses that (`origin:
-.upperLeft`) rather than hand-rolling a `1 - y` flip against an assumed convention — a first
-version did exactly that, assuming `NormalizedPoint` matched the old API's bottom-left-origin
-`CGPoint` convention without ever checking, which is exactly the kind of small, silent,
-survives-every-later-fix error that produces a persistent offset no amount of joint- or
-weight-tuning downstream can close, because the bug isn't in any of that, it's upstream of it.
+.upperLeft`) rather than hand-rolling a flip against an assumed convention.
 
 Getting an upright-image pixel point is only half the job: turning *that* into a screen point is
-hand-rolled aspect-fill math, not `ARFrame.displayTransform(for:viewportSize:)`. That API was
-tried first — it's the API-documented tool for exactly this job — but the point it produced
-never lined up with where `ARView` actually draws its camera background. `screenPoint(for:)`
+hand-rolled aspect-fill math, not `ARFrame.displayTransform(for:viewportSize:)` — that API's
+result never lined up with where `ARView` actually draws its camera background. `screenPoint(for:)`
 instead reproduces `ARView`'s aspect-fill rendering directly: scale the upright image
 (`Coordinator.uprightImageSize(of:orientation:)`) up until it covers the viewport, crop the
 overflow evenly off both sides, place the point in that scaled/cropped rect. This mirrors the
 math a working reference implementation (`posehandtest/PointerMapping.swift`) uses for its own
-on-screen hand cursor — though that project is on the *old* Vision API, so only the aspect-fill
-math transfers, not the coordinate conversion above it.
+on-screen hand cursor.
 
 It's the true midpoint of `thumbTip` and `indexTip` when both are confident — "between thumb and
 index," plainly, no weighting — and the one confident tip's own position when only one is (see
-"One tip is enough for the point" above). Two other schemes were tried on the way to the
-midpoint (`thumbTip` alone; a weighted average biased toward the thumb) specifically *because*
-the midpoint looked wrong on screen — but the midpoint itself was never actually the problem.
-Both `thumbTip` and `screenPoint(for:)` were still using the unverified `1 - y` flip at the time,
-so *every* point it fed was already off by the same upstream error; averaging two wrong points
-just looked like a different kind of wrong. Once `toImageCoordinates` replaced the hand-rolled
-flip (previous paragraph) and the per-joint conversion was checked against real device numbers
-(view/image sizes and the resulting point, printed via `ARStatus.pinchDebug`, matched a
-hand-computed expectation), the midpoint became trustworthy again and moved back to true 50/50.
-The lesson generalizes: when a computed point looks wrong, check the thing feeding it before
-changing *how it's combined* — averaging, weights, and joint choice can't fix an error in the
-conversion underneath them, and chasing the symptom at that layer just produces a
-different-looking wrong answer, not a right one.
+"Reading the pinch" above).
 
 `ARStatus.pinchDebug` (temporary — delete along with its call site in `updatePinchDetection()`
 and the line in `ContentView` once this is closed out) prints `viewportSize`, `uprightImageSize`,
-the raw normalized `thumbTip`, and the computed point together, so a future report can be
-checked against real numbers instead of guessed at.
+the raw normalized tip location, and the computed point together, so a reported offset can be
+checked against real device numbers instead of guessed at.
 
-**The crosshair.** `setUpCrosshair(in:)` hosts `PinchCrosshair` — an ordinary SwiftUI view — as a
-plain `UIHostingController` subview of `arView` itself, moved every sample by
-`updateCrosshair(at:progress:)` setting `host.view.center` directly, rather than a SwiftUI
-overlay positioned with `.position(point)` above `PostcardARView` (tried first, and how
-`docs/app-shell.md` used to describe it). That move alone didn't resolve the reported offset —
-the actual bug was upstream, in the point itself (previous paragraph), not in how it was
-displayed — but it's still the right way to display it: a subview of `arView` shares its
-coordinate space with `arView.ray(through:)` (the drag) by construction, instead of by two
-frameworks' layout systems happening to agree.
+**The crosshair.** `setUpCrosshair(in:)` hosts `PinchCrosshair` as a plain `UIHostingController`
+subview of `arView` itself, moved every sample by `updateCrosshair(at:progress:)` setting
+`host.view.center` directly — not a SwiftUI overlay positioned with `.position(point)` above
+`PostcardARView`. A subview of `arView` shares its coordinate space with `arView.ray(through:)`
+(the drag) by construction, instead of by two frameworks' layout systems happening to agree.
 
 **Filtering: One Euro, not a fixed EMA.** `updatePinchDetection()` runs the raw point through
 `pinchPointFilter` (a `PinchPointFilter`, two `OneEuroFilter`s — one per axis, see their doc
-comments for why per-axis) once, at sample time, and writes the result straight to `pinchPoint`
-— not inside `evaluatePinch` (see "Two guards, not one"), and read directly by both
-`updateCrosshair(at:progress:)` and `updateHeldSnail()`.
+comments for why per-axis) once, at sample time, and writes the result straight to `pinchPoint`,
+read directly by `updateHeldSnail()` and the crosshair.
 
-A fixed-factor EMA (`pinchPointSmoothing`, a single `previous + (raw - previous) * factor` blend)
-was tried first, and is a strict jitter-vs-lag dial with no way to be good at both: a factor
-steady enough to kill tremor at rest was also damping a fast-moving hand by the same fixed
-amount, adding well over 100 ms of lag while dragging — because the filter has no way to know a
-still hand and a moving one apart, and 15 Hz sampling means most of that time is spent on
-whichever end of the dial you didn't need this instant.
+A fixed-factor EMA (`previous + (raw - previous) * factor`) is a jitter-vs-lag dial with no way to
+be good at both: a factor steady enough to kill tremor at rest also damps a fast-moving hand by
+the same fixed amount, adding well over 100 ms of lag while dragging, because the filter has no
+way to tell a still hand from a moving one.
 
-`OneEuroFilter` (Casiez, Roussel, Vogel 2012) is the same idea as an EMA — `alpha * value + (1 -
-alpha) * previous` — except `alpha` isn't fixed: its `cutoff` frequency is `minCutoff + beta *
-|filtered derivative|`, so a still point gets the same low cutoff (`pinchMinCutoff`) a fixed EMA
-would need for steadiness, and a moving one gets a cutoff that rises with how fast it's actually
-moving, cutting lag automatically instead of trading it away everywhere at once. `pinchBeta`
-controls how fast that rise happens.
+`OneEuroFilter` (Casiez, Roussel, Vogel 2012) is the same idea — `alpha * value + (1 - alpha) *
+previous` — except `alpha` isn't fixed: its `cutoff` frequency is `minCutoff + beta * |filtered
+derivative|`, so a still point gets a low cutoff (`pinchMinCutoff`) for steadiness, and a moving
+one gets a cutoff that rises with how fast it's actually moving, cutting lag automatically.
+`pinchBeta` controls how fast that rise happens; `pinchDerivativeCutoff` smooths the derivative
+estimate itself before it's allowed to push `cutoff` up — a *lower* value there makes the
+derivative laggier, not calmer, so it stays at the reference default and `pinchMinCutoff` is the
+real rest-state knob (see "Tuning" below).
 
-That "still point" case still needed tuning before it actually held steady — `pinchMinCutoff`
-came down from the reference default (1.0) to 0.5. A lower `derivativeCutoff` (how much the
-*derivative itself* is smoothed before it's allowed to push `cutoff` up) was tried first instead,
-on the theory that 15 Hz sampling let raw tremor leak through the derivative estimate and nudge
-`cutoff` up on a still hand. It made jitter worse: a lower `derivativeCutoff` is a *laggier*
-derivative estimate, not a calmer one, so after any real motion it decays back toward zero
-slowly — keeping `cutoff` (and the point's responsiveness) elevated for a stretch *after* the
-hand had actually stopped, which reads as jitter persisting rather than settling.
-`pinchDerivativeCutoff` is left at the reference default for this reason; `pinchMinCutoff` is
-the actual knob for rest-state steadiness.
+It's also *dt*-aware, using a real timestamp (`frame.timestamp` from ARKit's own clock, captured
+before the `Task` in `updatePinchDetection()`, not `Date()`): `OneEuroFilter.filter(_:timestamp:)`
+computes `dt` from consecutive timestamps and folds it into `alpha` directly, so a skipped sample
+(occlusion, `handPoseTaskInFlight` overlap) doesn't quietly grow the filter's effective lag.
 
-It's *dt*-aware too (needs a real timestamp — `frame.timestamp`
-from ARKit's own clock, captured before the `Task` in `updatePinchDetection()`, not `Date()`),
-which the fixed EMA wasn't: a skipped sample (occlusion, `handPoseTaskInFlight` overlap) grew a
-fixed EMA's effective lag further, since the same fixed factor applied to a now-larger gap still
-only closed the same fraction of it. `OneEuroFilter.filter(_:timestamp:)` computes its own `dt`
-from consecutive timestamps and folds it into `alpha` directly, so a longer gap between samples
-doesn't quietly retune how much lag the filter itself adds.
-
-A render-loop glide toward each new sample — the same idiom as `hold(_:)` for cards, reapplying
-a filter every rendered frame (~60 fps) rather than once per sample — was also tried, separately,
-before either of the above. It made things worse, not better, for a different reason: gliding
-toward a target that itself only moves at `handPoseSampleInterval` (15 Hz) means the displayed
-point never catches up before the next sample moves the target again, so it settles into a
-steady lag behind the hand rather than ever converging. Filtering at sample time — fixed EMA or
-One Euro, either one — has no such catch-up debt: the displayed point is always exactly one
-filtered sample old, same recency as no filtering at all, just less noisy.
-
-`attemptGrab`/`updateHeldSnail` use the same filtered `pinchPoint` as the crosshair — no separate
-raw-vs-displayed split — since a light per-sample filter (unlike the render-loop glide above)
-isn't enough lag to matter for grab timing.
+Filtering happens once per sample, not once per rendered frame — a render-loop glide toward each
+new sample would mean the displayed point never catches up before the next sample moves the
+target again, since the target itself only moves at `handPoseSampleInterval` (15 Hz). Sample-time
+filtering has no such catch-up debt: the displayed point is always exactly one filtered sample
+old. `attemptGrab`/`updateHeldSnail` read the same filtered `pinchPoint` as the crosshair — no
+separate raw-vs-displayed split.
 
 ## Grab, drag, release
 
@@ -247,11 +179,6 @@ point at constant distance, rather than sliding toward or away from the camera.
 `updateFadingSnails()` steps its opacity down by `pinchFadeStep` each frame and removes it at
 zero — a plain per-frame loop rather than `AnimationResource`, since the render loop is already
 iterating every frame regardless.
-
-**Forced release.** If a pinch is closed and Vision stops confidently seeing a hand for
-`handPoseLossTimeout`, the snail releases anyway — a hand that lifts out of frame mid-grab would
-otherwise never produce the "opened" sample `evaluatePinch` needs to let go with, and the snail
-would stay stuck held forever.
 
 ## Finding the snails
 
@@ -281,8 +208,8 @@ release: softer because a release is expected, a grab is the moment that needs t
 
 All the constants above sit at the top of `PostcardARView.swift`, alongside the pose-smoothing
 ones. `pinchCloseRatio` / `pinchOpenRatio` are the ones actually worth tuning per hand — read
-them live by temporarily printing `ratio` in `updatePinchDetection()`, or by feeding it into
-`PinchCrosshair`'s ring (`updateCrosshair(at:progress:)` already computes `progress` from it).
+them live off the on-screen crosshair ring (`pinchProgress` already reflects them), or by
+temporarily printing `ratio` in `updatePinchDetection()`.
 
 `pinchOpenConfirmSamples` trades false-release immunity for release latency — raise it if a
 still-pinched snail still fades occasionally, lower it if release starts to feel delayed.
@@ -304,7 +231,4 @@ elevated for longer after real motion, not shorter). Leave it at the reference d
 `handScaleJointConfidenceMinimum` trades `ratio` update reliability for how loosely a `ratio`
 sample can be trusted — lower it further if the ring/release still stalls at close range, raise
 it if release starts firing off a `wrist`/`indexMCP` read that's really too poor to trust. See
-"Two guards, not one" above.
-
-There's no point-weighting knob anymore — see "The point" above for why it was tried and
-removed.
+"Reading the pinch" above.
