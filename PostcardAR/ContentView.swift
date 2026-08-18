@@ -61,13 +61,6 @@ private struct ScannerScreen: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
-
-            // TEMPORARY — see `ARStatus.pinchDebug`. Delete this line with it.
-            if !status.pinchDebug.isEmpty {
-                Text(status.pinchDebug)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.yellow)
-            }
         }
         .font(.subheadline.weight(.medium))
         .padding()

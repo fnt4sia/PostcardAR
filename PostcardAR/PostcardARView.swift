@@ -193,10 +193,6 @@ final class ARStatus {
     /// Collected rather than replaced: with several models, one missing `.usdz` must not hide
     /// the next.
     var errors: [String] = []
-
-    /// TEMPORARY — pinch-point diagnostics, to be read off a screenshot and then deleted. Not
-    /// a permanent status field like the others above.
-    var pinchDebug: String = ""
 }
 
 // MARK: - View
@@ -305,13 +301,10 @@ extension PostcardARView {
         private var pinchOpenStreak = 0
 
         /// Last time `evaluatePinch(ratio:at:)` actually ran — what `handPoseLossTimeout` counts
-        /// against for the *two* forced-release bail-outs in `updatePinchDetection()` that lack
-        /// any other evidence the hand is still there (no hand at all; neither tip readable). Not
-        /// "last time a sample saw a hand": resetting on mere hand-presence made those two
-        /// timeouts dead code, since every bail-out downstream of `guard let hand` runs on a
-        /// sample where a hand was *just* seen — see git history for the version that shipped
-        /// briefly with that bug. The third guard (wrist/knuckle only) deliberately does *not*
-        /// use this timer — see its own bail-out comment.
+        /// against for the *two* forced-release bail-outs that lack any other evidence the hand
+        /// is still there (no hand at all; neither tip readable). Not "last time a sample saw a
+        /// hand" — that made the timeout dead code, since those bail-outs always run right after
+        /// a hand was seen. The third guard (wrist/knuckle) doesn't use this — see its comment.
         private var lastPinchEvaluationTime = Date.distantPast
 
         /// Displayed pinch point — crosshair and drag both read this, set from each raw sample
@@ -654,15 +647,6 @@ extension PostcardARView {
                 } else {
                     raw = screenPoint(for: anchorTip.location)
                 }
-
-                // TEMPORARY — see `ARStatus.pinchDebug`.
-                status.pinchDebug = String(
-                    format: "view %.0fx%.0f img %.0fx%.0f raw %.2f,%.2f pt %.0f,%.0f",
-                    viewportSize.width, viewportSize.height,
-                    uprightImageSize.width, uprightImageSize.height,
-                    anchorTip.location.x, anchorTip.location.y,
-                    raw.x, raw.y
-                )
 
                 let filtered = pinchPointFilter.filter(raw, timestamp: timestamp)
 

@@ -120,11 +120,6 @@ It's the true midpoint of `thumbTip` and `indexTip` when both are confident — 
 index," plainly, no weighting — and the one confident tip's own position when only one is (see
 "Reading the pinch" above).
 
-`ARStatus.pinchDebug` (temporary — delete along with its call site in `updatePinchDetection()`
-and the line in `ContentView` once this is closed out) prints `viewportSize`, `uprightImageSize`,
-the raw normalized tip location, and the computed point together, so a reported offset can be
-checked against real device numbers instead of guessed at.
-
 **The crosshair.** `setUpCrosshair(in:)` hosts `PinchCrosshair` as a plain `UIHostingController`
 subview of `arView` itself, moved every sample by `updateCrosshair(at:progress:)` setting
 `host.view.center` directly — not a SwiftUI overlay positioned with `.position(point)` above
