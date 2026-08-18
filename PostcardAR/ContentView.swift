@@ -40,12 +40,6 @@ private struct ScannerScreen: View {
                     .buttonStyle(.borderedProminent)
                     .padding()
             }
-            .overlay(alignment: .topLeading) {
-                if let point = status.pinchPoint {
-                    PinchCrosshair(progress: status.pinchProgress)
-                        .position(point)
-                }
-            }
     }
 
     /// Detection and model loading are reported separately, because when nothing shows up the
@@ -67,6 +61,13 @@ private struct ScannerScreen: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+
+            // TEMPORARY — see `ARStatus.pinchDebug`. Delete this line with it.
+            if !status.pinchDebug.isEmpty {
+                Text(status.pinchDebug)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.yellow)
+            }
         }
         .font(.subheadline.weight(.medium))
         .padding()
@@ -81,8 +82,11 @@ private struct ScannerScreen: View {
     }
 }
 
-/// Where the pinch is landing, and how closed it currently is.
-private struct PinchCrosshair: View {
+/// Where the pinch is landing, and how closed it currently is. Not used from SwiftUI directly —
+/// `PostcardARView.Coordinator` hosts it as a plain subview of `arView` via `UIHostingController`
+/// (see `setUpCrosshair(in:)`), so it shares `arView`'s own coordinate space instead of going
+/// through a separate SwiftUI overlay that could disagree with it on where things land.
+struct PinchCrosshair: View {
     let progress: Float
 
     var body: some View {

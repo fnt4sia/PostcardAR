@@ -19,6 +19,7 @@
 
 import ARKit
 import Combine
+import CoreVideo
 import RealityKit
 import SwiftUI
 import UIKit
@@ -48,7 +49,38 @@ private let rotationDeadBand: Float = 2 * .pi / 180 // radians
 private let smoothingFactor: Float = 0.15
 
 /// Hand-pose sampling rate, deliberately slower than the render loop — see `updatePinchDetection()`.
+/// Vision inference competes with ARKit tracking and RealityKit's render for the same GPU/ANE
+/// time; 15 Hz keeps that contention low enough that the card model itself stays smooth. A
+/// 30 Hz trial made the crosshair steadier but made the card jittery and prone to disappearing —
+/// not a trade worth making.
 private let handPoseSampleInterval: TimeInterval = 1.0 / 15.0
+
+/// One Euro filter tuning for the displayed pinch point — see `OneEuroFilter` and "Filtering:
+/// One Euro, not a fixed EMA" in `docs/interaction.md`. A fixed-factor EMA (tried first) is one
+/// point on a jitter-vs-lag dial with no way off it: steady enough at rest cost ~124 ms of lag
+/// while dragging, because the same factor damps a still hand and a fast one identically. One
+/// Euro's cutoff rises with the point's own filtered speed, so it stays just as steady at rest
+/// and opens up automatically once the hand is actually moving.
+///
+/// `pinchMinCutoff` sets the at-rest jitter floor in Hz — lower is steadier when still. This is
+/// the knob for rest-jitter, not `pinchDerivativeCutoff` below (a lower value was tried there
+/// instead and made jitter worse, not better — see its doc comment).
+/// `pinchBeta` sets how fast the cutoff rises with speed — higher cuts lag faster once moving,
+/// at the cost of jitter creeping back in sooner as speed picks up. `pinchBeta` is the filter's
+/// own reference-implementation value (Casiez et al. 2012, https://cristal.univ-lille.fr/~casiez/1euro/);
+/// `pinchMinCutoff` has been lowered from that reference default (1.0) for a steadier rest state.
+private let pinchMinCutoff: Double = 0.5
+private let pinchBeta: Double = 0.007
+
+/// See `OneEuroFilter.derivativeCutoff`. A *lower* value than the reference implementation's
+/// 1 Hz default was tried here first, on the theory that it would filter tremor out of the
+/// derivative estimate before it could nudge the adaptive cutoff up. It made jitter worse: a
+/// lower cutoff means a *laggier* derivative estimate, not a calmer one — after any fast motion
+/// it decays back toward zero slowly, so the adaptive cutoff (and the point's responsiveness)
+/// stays elevated for a stretch *after* the hand has actually stopped, reading as persistent
+/// jitter rather than settling. Left at the reference default; `pinchMinCutoff` is the real knob
+/// for rest-state steadiness.
+private let pinchDerivativeCutoff: Double = 1.0
 
 /// Thumb-to-index distance (normalized by hand size) marking closed/open. Two thresholds, not
 /// one, to avoid chatter right at the pinch boundary.
@@ -57,6 +89,15 @@ private let pinchOpenRatio: Float = 0.2
 
 /// Joint confidence floor — below this a hand-pose point is noise, not signal.
 private let jointConfidenceMinimum: Float = 0.3
+
+/// Confidence floor for `wrist`/`indexMCP` specifically — looser than `jointConfidenceMinimum`.
+/// They only measure a coarse hand-size reference for `ratio`'s denominator, never a precise
+/// position, and they run less confidently than the fingertips at close range (the wrist
+/// especially, being nearer the frame edge). Gating them at the fingertip-precision bar meant
+/// `ratio` — and with it the ring and release — silently stopped updating on close-range dips
+/// that the fingertip-driven point itself sailed through untouched: ring stuck, snail never
+/// releasing, looking frozen while the crosshair kept moving.
+private let handScaleJointConfidenceMinimum: Float = 0.1
 
 /// How close, in points, the pinch point must land to a snail's projected position to grab it.
 private let pinchPickRadius: CGFloat = 80
@@ -67,6 +108,113 @@ private let pinchFadeStep: Float = 1.0 / 24.0
 /// If something's held and Vision loses the hand for this long, force a release — otherwise a
 /// hand that lifts out of frame mid-grab never produces the "opened" sample to let go with.
 private let handPoseLossTimeout: TimeInterval = 0.3
+
+/// Consecutive open-ratio samples required before a release is confirmed — a single sample past
+/// `pinchOpenRatio` is as likely to be one occluded joint (the thumb tip, mid-pinch) as a real
+/// open, and a false release is unrecoverable (the snail is already fading). ~133 ms at
+/// `handPoseSampleInterval`, comfortably under `handPoseLossTimeout` so a deliberate open
+/// still beats a hand leaving frame. A counter, not a timer, so a slow inference sample (task
+/// overlap skips a sample) can't make the very next sample look like a sustained open.
+///
+/// Was 3 (~200 ms). A fast "let go" flick motion-blurs the fingertips for a stretch — Vision's
+/// confidence on them dips mid-motion the same way it does on a fast-moving card, nothing
+/// broken about it — so most of a fast release's samples fail the point guard outright (skipped,
+/// not counted) rather than reading a clean open. By the time the hand slows enough for
+/// confidence to return, 3 *consecutive* clean reads asked for more settling than a fast
+/// gesture naturally gives it; a slow release never hit this because there's no blur to dodge.
+private let pinchOpenConfirmSamples = 2
+
+/// Rotation needed to bring the **rear** camera's `capturedImage` upright for a given UI
+/// orientation, so it can be handed to Vision as an explicit orientation hint. (The front
+/// camera would additionally need mirroring; `ARWorldTrackingConfiguration` always uses the
+/// rear one.) See "Reading the pinch" in `docs/interaction.md`.
+private extension CGImagePropertyOrientation {
+    init(rearCameraFor interfaceOrientation: UIInterfaceOrientation) {
+        switch interfaceOrientation {
+        case .portraitUpsideDown: self = .left
+        case .landscapeLeft: self = .down
+        case .landscapeRight: self = .up
+        default: self = .right // .portrait and .unknown
+        }
+    }
+}
+
+/// One Euro filter (Casiez, Roussel, Vogel 2012) — a low-pass whose cutoff frequency rises with
+/// the signal's own filtered speed, so it damps tremor in a still signal as hard as a fixed-low
+/// cutoff would, but opens up automatically once the signal is actually moving, instead of
+/// damping every speed by the same fixed amount. See `pinchMinCutoff`/`pinchBeta`.
+///
+/// One instance per scalar channel — `PinchPointFilter` below runs two of these, one per axis,
+/// rather than this filtering a `CGPoint` directly, since the two axes' speeds are logically
+/// independent (a diagonal drag isn't "faster" in a way that should smooth differently from an
+/// axis-aligned one of the same per-axis speed).
+struct OneEuroFilter {
+    var minCutoff: Double
+    var beta: Double
+    /// Cutoff for smoothing the *derivative* — 1 Hz in the reference implementation, which
+    /// assumes a signal sampled well above 15 Hz. At `handPoseSampleInterval`'s rate, tremor in
+    /// the raw point still shows up as noise in the derivative *after* 1 Hz smoothing, which then
+    /// nudges `cutoff` (`minCutoff + beta * |derivative|`) up on a still hand exactly when
+    /// `minCutoff` alone was supposed to hold it steady — the adaptive part fighting the at-rest
+    /// part. Lower than the reference default here, unlike `minCutoff`/`beta`, precisely because
+    /// this app's sample rate isn't what the default was chosen for.
+    var derivativeCutoff: Double
+
+    private var previousValue: Double?
+    private var previousDerivative: Double = 0
+    private var previousTimestamp: TimeInterval?
+
+    // Written explicitly, not left to the synthesized memberwise init: a struct's synthesized
+    // init is `private` as soon as *any* stored property is (the `previous*` ones above), even
+    // ones excluded from it by having a default — not just the ones it actually takes as
+    // parameters.
+    init(minCutoff: Double, beta: Double, derivativeCutoff: Double) {
+        self.minCutoff = minCutoff
+        self.beta = beta
+        self.derivativeCutoff = derivativeCutoff
+    }
+
+    mutating func filter(_ value: Double, timestamp: TimeInterval) -> Double {
+        guard let previousValue, let previousTimestamp else {
+            self.previousValue = value
+            self.previousTimestamp = timestamp
+            return value
+        }
+        let dt = max(timestamp - previousTimestamp, 1e-6) // guards divide-by-zero on a repeat timestamp
+
+        let derivative = (value - previousValue) / dt
+        let smoothedDerivative = lowPass(derivative, previous: previousDerivative,
+                                          alpha: alpha(for: derivativeCutoff, dt: dt))
+
+        let cutoff = minCutoff + beta * abs(smoothedDerivative)
+        let filtered = lowPass(value, previous: previousValue, alpha: alpha(for: cutoff, dt: dt))
+
+        self.previousValue = filtered
+        self.previousDerivative = smoothedDerivative
+        self.previousTimestamp = timestamp
+        return filtered
+    }
+
+    private func alpha(for cutoff: Double, dt: TimeInterval) -> Double {
+        let timeConstant = 1 / (2 * .pi * cutoff)
+        return 1 / (1 + timeConstant / dt)
+    }
+
+    private func lowPass(_ value: Double, previous: Double, alpha: Double) -> Double {
+        alpha * value + (1 - alpha) * previous
+    }
+}
+
+/// Two independent `OneEuroFilter`s over a `CGPoint` — see `OneEuroFilter` for why per-axis.
+struct PinchPointFilter {
+    private var x = OneEuroFilter(minCutoff: pinchMinCutoff, beta: pinchBeta, derivativeCutoff: pinchDerivativeCutoff)
+    private var y = OneEuroFilter(minCutoff: pinchMinCutoff, beta: pinchBeta, derivativeCutoff: pinchDerivativeCutoff)
+
+    mutating func filter(_ point: CGPoint, timestamp: TimeInterval) -> CGPoint {
+        CGPoint(x: x.filter(point.x, timestamp: timestamp),
+                y: y.filter(point.y, timestamp: timestamp))
+    }
+}
 
 // MARK: - Status
 
@@ -87,11 +235,9 @@ final class ARStatus {
     /// the next.
     var errors: [String] = []
 
-    /// Screen point of the crosshair overlay; `nil` while no hand is confidently in view.
-    var pinchPoint: CGPoint?
-
-    /// How closed the current pinch is, `0` (open) to `1` (closed) — drives the crosshair's ring.
-    var pinchProgress: Float = 0
+    /// TEMPORARY — pinch-point diagnostics, to be read off a screenshot and then deleted. Not
+    /// a permanent status field like the others above.
+    var pinchDebug: String = ""
 }
 
 // MARK: - View
@@ -195,14 +341,44 @@ extension PostcardARView {
         /// Debounced open/closed pinch state — see `pinchCloseRatio`/`pinchOpenRatio`.
         private var pinchClosed = false
 
-        /// Last time a sample confidently saw a hand — what `handPoseLossTimeout` counts against.
-        private var lastConfidentHandTime = Date.distantPast
+        /// Consecutive samples in a row read past `pinchOpenRatio` while held — see
+        /// `pinchOpenConfirmSamples`. Reset on any sample that isn't one.
+        private var pinchOpenStreak = 0
 
-        /// Screen point of the most recent pinch sample; drag reuses it between samples.
+        /// Last time a sample saw a hand at all — what `handPoseLossTimeout` counts against. Not
+        /// "read four confident joints": a tight pinch is exactly when the thumb occludes the
+        /// index fingertip, so requiring joint confidence here would call the most deliberate
+        /// pinch a lost hand.
+        private var lastHandSeenTime = Date.distantPast
+
+        /// Displayed pinch point — crosshair and drag both read this, set from each raw sample
+        /// after `pinchPointFilter` damps it. No render-loop glide stage: one was tried, and
+        /// gliding toward a target that itself only moves at `handPoseSampleInterval` (15 Hz)
+        /// compounds into steady-state lag behind the hand, which reads worse than the
+        /// sample-to-sample stair-step it was meant to fix.
         private var pinchPoint: CGPoint?
+
+        /// One Euro filter state for `pinchPoint` — carries the previous value/derivative across
+        /// samples, so it's reset (fresh `PinchPointFilter()`) whenever the hand is lost, the
+        /// same "don't glide in from a stale position" reasoning `pinchPoint == nil` used to get
+        /// for free by being nil itself.
+        private var pinchPointFilter = PinchPointFilter()
+
+        /// Ring fill from the last sample that actually computed a `ratio` — kept so a
+        /// wrist/knuckle confidence dip (see `updatePinchDetection()`) can move the crosshair
+        /// without also resetting its ring to empty.
+        private var pinchProgress: Float = 0
 
         /// `.soft` — firm grab, gentle let-go. `prepare()`d early to hide Taptic spin-up latency.
         private var pinchHaptics: UIImpactFeedbackGenerator?
+
+        /// Renders `PinchCrosshair` as a subview of `arView` itself, not a SwiftUI overlay above
+        /// it. `pinchPoint` is computed in `arView.bounds` space and `arView.ray(through:)`
+        /// consumes it in that same space — putting the crosshair through a *second* coordinate
+        /// system (SwiftUI's overlay) was the actual bug: the same point projected right for the
+        /// held snail and wrong for the crosshair, because only one of the two ever agreed with
+        /// `arView.bounds`. A subview of `arView` can't disagree with it.
+        private var crosshairHost: UIHostingController<PinchCrosshair>?
 
         init(status: ARStatus) {
             self.status = status
@@ -240,6 +416,7 @@ extension PostcardARView {
 
             self.arView = arView
             pinchHaptics = UIImpactFeedbackGenerator(style: .soft, view: arView)
+            setUpCrosshair(in: arView)
 
             // Fixed at the world origin and never rewritten — a static parent so pivots stay in
             // the visible tree even when their own image anchor goes untracked.
@@ -386,6 +563,46 @@ extension PostcardARView {
 
         // MARK: Pinch pickup
 
+        /// Adds `PinchCrosshair` as a plain subview of `arView`, not a SwiftUI overlay — see
+        /// `crosshairHost`. Sized once; `updateCrosshair(at:progress:)` only ever moves/hides it.
+        private func setUpCrosshair(in arView: ARView) {
+            let host = UIHostingController(rootView: PinchCrosshair(progress: 0))
+            host.view.backgroundColor = .clear
+            host.view.isUserInteractionEnabled = false
+            host.view.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
+            host.view.isHidden = true
+            arView.addSubview(host.view)
+            crosshairHost = host
+        }
+
+        /// Moves the crosshair to `point` (in `arView`'s own coordinate space — same as
+        /// `pinchPoint`) and updates its ring fill. `nil` hides it.
+        private func updateCrosshair(at point: CGPoint?, progress: Float) {
+            guard let host = crosshairHost else { return }
+            guard let point else {
+                host.view.isHidden = true
+                return
+            }
+            host.view.isHidden = false
+            host.view.center = point
+            host.rootView = PinchCrosshair(progress: progress)
+        }
+
+        /// Size of `capturedImage` after being rotated upright by `imageOrientation` — what the
+        /// aspect-fill math in `updatePinchDetection()` measures the crop against. A 90°
+        /// rotation swaps width and height; `capturedImage` itself is always landscape.
+        private static func uprightImageSize(of pixelBuffer: CVPixelBuffer,
+                                              orientation: CGImagePropertyOrientation) -> CGSize {
+            let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+            let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+            switch orientation {
+            case .left, .leftMirrored, .right, .rightMirrored:
+                return CGSize(width: height, height: width)
+            default:
+                return CGSize(width: width, height: height)
+            }
+        }
+
         /// Samples the camera for a hand pinch, at most once every `handPoseSampleInterval`.
         /// Reads `session.currentFrame` from the render loop, same ARFrame-retention reason as
         /// the pose filter above — only `capturedImage` crosses into the `Task`, never the frame.
@@ -399,63 +616,158 @@ extension PostcardARView {
             handPoseTaskInFlight = true
 
             let pixelBuffer = frame.capturedImage
+            let timestamp = frame.timestamp // feeds `pinchPointFilter`; ARKit's clock, not `Date()`
             let viewportSize = arView.bounds.size
-            let orientation = arView.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
-            let displayTransform = frame.displayTransform(for: orientation, viewportSize: viewportSize)
+            let interfaceOrientation = arView.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
+            // `capturedImage` is always landscape (sensor-native), regardless of device
+            // orientation — this is the rotation needed to bring it upright for the current UI.
+            let imageOrientation = CGImagePropertyOrientation(rearCameraFor: interfaceOrientation)
+            let uprightImageSize = Self.uprightImageSize(of: pixelBuffer, orientation: imageOrientation)
 
             // @MainActor so mutations below land on the same thread `onRenderFrame` runs on;
             // `perform(on:orientation:)` still suspends off it for the actual inference.
             Task { @MainActor in
                 defer { handPoseTaskInFlight = false }
 
-                // No orientation hint — Vision then leaves joints in `capturedImage`'s own
-                // coordinate space, which is what `displayTransform` below expects. A hint would
-                // hand back already-rotated coordinates and double-rotate the point.
-                guard
-                    let hand = try? await handPoseRequest.perform(on: pixelBuffer).first,
-                    let thumb = hand.joint(for: .thumbTip), thumb.confidence > jointConfidenceMinimum,
-                    let index = hand.joint(for: .indexTip), index.confidence > jointConfidenceMinimum,
-                    let wrist = hand.joint(for: .wrist), wrist.confidence > jointConfidenceMinimum,
-                    let knuckle = hand.joint(for: .indexMCP), knuckle.confidence > jointConfidenceMinimum
-                else {
-                    // No confident hand this sample. Hide the crosshair immediately; a held
-                    // snail only force-releases after `handPoseLossTimeout`, so one dropped
-                    // sample mid-hold doesn't drop it.
-                    status.pinchPoint = nil
-                    if pinchClosed, Date().timeIntervalSince(lastConfidentHandTime) >= handPoseLossTimeout {
+                // Orientation hint given explicitly this time: Vision rotates internally and
+                // hands back joints already in the upright image's coordinate space, which is
+                // what the aspect-fill math below expects. `ARFrame.displayTransform` was tried
+                // first for this same job and never lined up right against `ARView`'s own camera
+                // background rendering — this mirrors the mapping a working reference
+                // implementation (`posehandtest`) uses instead.
+                let hand = try? await handPoseRequest.perform(on: pixelBuffer, orientation: imageOrientation).first
+                if hand != nil {
+                    lastHandSeenTime = Date()
+                }
+
+                // Truly no hand is the only case that wipes state — see "Occlusion vs. no hand"
+                // in `docs/interaction.md`. Everything else (one tip occluded, wrist/knuckle
+                // unreadable) is handled below without erasing anything, because a hand that's
+                // merely hard to read this sample isn't a hand that's gone.
+                guard let hand else {
+                    pinchPoint = nil
+                    pinchPointFilter = PinchPointFilter() // don't glide in from a stale position
+                    pinchOpenStreak = 0
+                    updateCrosshair(at: nil, progress: 0)
+                    if pinchClosed, Date().timeIntervalSince(lastHandSeenTime) >= handPoseLossTimeout {
                         pinchClosed = false
                         releaseHeld()
                     }
                     return
                 }
 
-                lastConfidentHandTime = Date()
+                // `ARView` renders its camera background aspect-fill: scaled up until it covers
+                // the view, overflow cropped evenly off both sides. Reproducing that scale/crop
+                // by hand — rather than trusting `displayTransform` to already match it — is
+                // what actually lines the point up with what's on screen.
+                //
+                // The flip from Vision's convention to a normal top-left/y-down image is done by
+                // `NormalizedPoint.toImageCoordinates`, not by hand: a hand-rolled `1 - y` was
+                // never verified against this type's actual convention (it's a distinct type,
+                // `Vision.NormalizedPoint`, not the plain `CGPoint` the old ObjC-bridged Vision
+                // API returned) and is exactly the kind of small, silent, survives-every-later-fix
+                // error a wrong assumption there would produce.
+                func screenPoint(for location: NormalizedPoint) -> CGPoint {
+                    guard uprightImageSize.width > 0, uprightImageSize.height > 0 else { return .zero }
+                    let imagePoint = location.toImageCoordinates(uprightImageSize, origin: .upperLeft)
+                    let scale = max(viewportSize.width / uprightImageSize.width,
+                                     viewportSize.height / uprightImageSize.height)
+                    let displayed = CGSize(width: uprightImageSize.width * scale,
+                                            height: uprightImageSize.height * scale)
+                    let originX = (viewportSize.width - displayed.width) / 2
+                    let originY = (viewportSize.height - displayed.height) / 2
+                    return CGPoint(x: originX + imagePoint.x * scale, y: originY + imagePoint.y * scale)
+                }
+
+                // Raw joints, kept regardless of confidence — `ratio` below falls back to these
+                // once *a* confident tip has vouched for the sample, same as the point does.
+                let thumbJoint = hand.joint(for: .thumbTip)
+                let indexJoint = hand.joint(for: .indexTip)
+
+                // Confident, not just present: a joint below `jointConfidenceMinimum` is noise,
+                // not a position. `index` in particular sits on top of the joint the thumb
+                // occludes mid-pinch, so during exactly the drag this gesture is for, it's the
+                // one that routinely drops out.
+                let thumb = thumbJoint.flatMap { $0.confidence > jointConfidenceMinimum ? $0 : nil }
+                let index = indexJoint.flatMap { $0.confidence > jointConfidenceMinimum ? $0 : nil }
+
+                // At least one tip, not both: requiring both dropped the *entire* sample — point
+                // included — on a single occluded tip, freezing the point for a full sample
+                // period (~67 ms) at exactly the moment (mid-drag, thumb over index) it happens
+                // most. The point only needs *a* position; `ratio` is what actually needs both
+                // tips' true distance, and stays gated on both, further down.
+                guard let anchorTip = thumb ?? index else {
+                    // Hand's here but neither tip is readable this sample. Hold the last point
+                    // rather than erasing it — same dead-band idiom as the card pose filter, and
+                    // the reasoning `docs/interaction.md` calls "Occlusion vs. no hand": a snail
+                    // still `held` here needs `pinchPoint` left alone, not nulled, or it freezes
+                    // mid-drag without ever actually being released.
+                    if pinchClosed, Date().timeIntervalSince(lastHandSeenTime) >= handPoseLossTimeout {
+                        pinchClosed = false
+                        releaseHeld()
+                    }
+                    return
+                }
+
+                // Midpoint when both tips are readable — "between thumb and index," verified
+                // correct against real device numbers, see `docs/interaction.md` — and just the
+                // one confident tip's own position otherwise, rather than no update at all.
+                let raw: CGPoint
+                if let thumb, let index {
+                    let thumbScreenPoint = screenPoint(for: thumb.location)
+                    let indexScreenPoint = screenPoint(for: index.location)
+                    raw = CGPoint(x: (thumbScreenPoint.x + indexScreenPoint.x) / 2,
+                                   y: (thumbScreenPoint.y + indexScreenPoint.y) / 2)
+                } else {
+                    raw = screenPoint(for: anchorTip.location)
+                }
+
+                // TEMPORARY — see `ARStatus.pinchDebug`.
+                status.pinchDebug = String(
+                    format: "view %.0fx%.0f img %.0fx%.0f raw %.2f,%.2f pt %.0f,%.0f",
+                    viewportSize.width, viewportSize.height,
+                    uprightImageSize.width, uprightImageSize.height,
+                    anchorTip.location.x, anchorTip.location.y,
+                    raw.x, raw.y
+                )
+
+                let filtered = pinchPointFilter.filter(raw, timestamp: timestamp)
+
+                // Point placed — move the crosshair unconditionally before checking whether
+                // there's enough to also evaluate a grab/release this sample.
+                pinchPoint = filtered
+                updateCrosshair(at: filtered, progress: pinchProgress)
+
+                // `ratio` uses `thumbJoint`/`indexJoint` — the *raw* joints, not the
+                // confidence-filtered `thumb`/`index` — for the same reason the point fell back
+                // to one confident tip earlier: requiring both confident here meant a fast
+                // release (which blurs both tips at once more often than it blurs one) rarely
+                // produced a usable ratio sample at all, so `pinchOpenConfirmSamples` rarely got
+                // the consecutive reads it needed and the snail stayed `held`, looking like it
+                // was floating rather than being dragged-but-never-released. `anchorTip` already
+                // guarantees at least one tip is genuinely confident this sample — that's what
+                // makes trusting the other tip's raw position acceptable here, same as it was for
+                // the point. `wrist`/`indexMCP` stay gated on `handScaleJointConfidenceMinimum`.
+                guard
+                    let thumbJoint, let indexJoint,
+                    let wrist = hand.joint(for: .wrist), wrist.confidence > handScaleJointConfidenceMinimum,
+                    let knuckle = hand.joint(for: .indexMCP), knuckle.confidence > handScaleJointConfidenceMinimum
+                else { return } // point already placed; nothing here needs a ratio this sample
 
                 let handScale = wrist.distance(to: knuckle)
                 guard handScale > 0 else { return }
-                let ratio = Float(thumb.distance(to: index) / handScale)
+                let ratio = Float(thumbJoint.distance(to: indexJoint) / handScale)
 
-                // Vision's normalized point is bottom-left origin; ARKit's display transform
-                // expects top-left, hence the manual flip before applying it.
-                let midpoint = CGPoint(
-                    x: (thumb.location.x + index.location.x) / 2,
-                    y: 1 - (thumb.location.y + index.location.y) / 2
-                ).applying(displayTransform)
-                let screenPoint = CGPoint(
-                    x: midpoint.x * viewportSize.width,
-                    y: midpoint.y * viewportSize.height
-                )
-
-                evaluatePinch(ratio: ratio, at: screenPoint)
+                evaluatePinch(ratio: ratio, at: filtered)
             }
         }
 
-        /// Debounces one hand-pose sample into a grab or release, and drives the crosshair
-        /// overlay's position and ring fill.
+        /// Debounces one hand-pose sample into a grab or release, and updates the ring fill.
+        /// The point itself (`pinchPoint`) is already set by the caller — see
+        /// `updatePinchDetection()` — since placing it doesn't depend on anything evaluated here.
         private func evaluatePinch(ratio: Float, at point: CGPoint) {
-            pinchPoint = point
-            status.pinchPoint = point
-            status.pinchProgress = min(max((pinchOpenRatio - ratio) / (pinchOpenRatio - pinchCloseRatio), 0), 1)
+            pinchProgress = min(max((pinchOpenRatio - ratio) / (pinchOpenRatio - pinchCloseRatio), 0), 1)
+            updateCrosshair(at: point, progress: pinchProgress)
 
             if !pinchClosed, ratio < pinchOpenRatio {
                 pinchHaptics?.prepare() // warm the Taptic Engine before the grab is confirmed
@@ -463,10 +775,21 @@ extension PostcardARView {
 
             if !pinchClosed, ratio < pinchCloseRatio {
                 pinchClosed = true
+                pinchOpenStreak = 0
                 attemptGrab(at: point)
             } else if pinchClosed, ratio > pinchOpenRatio {
-                pinchClosed = false
-                releaseHeld()
+                // Require a run of open samples, not just one — a single occluded joint (the
+                // thumb tip, mid-pinch) can spike the ratio without the hand actually opening,
+                // and a false release can't be undone: the snail is already fading by the time
+                // the next sample would prove it wrong.
+                pinchOpenStreak += 1
+                if pinchOpenStreak >= pinchOpenConfirmSamples {
+                    pinchClosed = false
+                    pinchOpenStreak = 0
+                    releaseHeld()
+                }
+            } else {
+                pinchOpenStreak = 0
             }
         }
 
