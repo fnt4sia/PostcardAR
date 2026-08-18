@@ -17,8 +17,8 @@ are; RealityKit puts pixels there.
 ## The session and its configuration
 
 ```swift
-let configuration = ARImageTrackingConfiguration()
-configuration.trackingImages = referenceImages
+let configuration = ARWorldTrackingConfiguration()
+configuration.detectionImages = referenceImages
 configuration.maximumNumberOfTrackedImages = referenceImages.count
 arView.session.run(configuration)
 ```
@@ -28,12 +28,20 @@ class you pick determines the whole behaviour:
 
 | Configuration | Behaviour |
 |---|---|
-| `ARWorldTrackingConfiguration` | Maps the room, tracks the device in it. Images can be detected once, then the anchor stays put in world space. |
-| `ARImageTrackingConfiguration` | Ignores the room entirely. Locates each image relative to the camera, every frame. |
+| `ARWorldTrackingConfiguration` | Maps the room via visual-inertial odometry, tracks the device in it. With `detectionImages` set and `maximumNumberOfTrackedImages` above 0, a detected image's anchor keeps updating every frame, room-fixed. |
+| `ARImageTrackingConfiguration` | Ignores the room entirely. Locates each image relative to the *camera*, fresh every frame, with no persistent sense of where the device itself is. |
 
-We use image tracking because the cards **move**. World tracking assumes what it detected stays
-where it was — correct for a poster on a wall, wrong for a card in your hand, which would leave
-the model floating where the card used to be.
+We use world tracking because plain image tracking has no world origin: a card's pose comes
+back relative to the current camera view, not the room. Panning the phone past a stationary
+card then reads to the smoothing filter as the card moving — the dead band never engages
+because the "held" pose keeps sliding with the camera, so the model visibly drags and only
+settles once the phone stops. World tracking's device pose (from the room map) factors that
+camera motion out, so a still card yields a still target.
+
+`maximumNumberOfTrackedImages` still has to be set explicitly and to the full count: it
+defaults to 0 on `ARWorldTrackingConfiguration`, under which a detected image is posed once and
+frozen there — the exact "anchor left where the card used to be" failure that ruled out plain
+world tracking (without continuous image detection) for cards held in the hand.
 
 `automaticallyConfigureSession = false` on the `ARView` stops it from helpfully replacing our
 configuration with its default world-tracking one.
@@ -73,15 +81,22 @@ it *is* comes from components attached to it. Entities form a tree, and a child'
 relative to its parent — which is what carries a card's pose down to its model:
 
 ```
-AnchorEntity(.image)   ← ARKit writes that card's pose here, every frame
-  └── pivot            ← we write a smoothed pose here, every rendered frame
+worldRoot (static)     ← one shared anchor, added once, never rewritten
+  └── pivot            ← we write a smoothed pose here, only while the card is tracked
         └── model      ← we set scale and position here, once
+
+AnchorEntity(.image)   ← ARKit writes that card's pose here, every frame; read from, never
+                          parented to
 ```
 
-There is one of these branches per reference image, and they are independent: each has its own
-anchor, pivot, model, and filter state. All of them are built and added to the scene at startup,
-because an image anchor is inert until ARKit tracks its image — an off-camera card costs
-nothing.
+Each card's `pivot` hangs off a single shared `worldRoot` — `AnchorEntity(world: .zero)`, added
+once and never written to — rather than off that card's own image anchor. This is what keeps a
+card's model on screen while its anchor goes untracked: RealityKit hides an anchor's *descendants*
+whenever that anchor is untracked, and `pivot` is no longer one. See "Tracking loss" below.
+
+There is one `anchor`/`pivot`/model triple per reference image, and they are independent: each
+has its own filter state. All of them are built and added to the scene at startup, because an
+image anchor is inert until ARKit tracks its image — an off-camera card costs nothing.
 
 The coordinator keeps them in an array of small `Card` structs (name, printed width, anchor,
 pivot, `heldPose`). The entities inside are classes, so copying a `Card` still refers to the same
@@ -118,20 +133,23 @@ of the card's surface.
 
 ## Tracking loss
 
-There is no code for this at all. RealityKit stops drawing an image anchor's children whenever
-that card is not being tracked, which is exactly the wanted behaviour: a model sitting at a pose
-nobody is measuring any more is the worst kind of drift, because it looks placed but is
-guessing.
+The render loop simply stops updating a card's `pivot` while its anchor is untracked — no
+frame writes it, so it holds its last pose. Because `pivot` is parented to the shared
+`worldRoot` rather than to the card's own image anchor, it stays in the visible tree the whole
+time: nothing hides it, so the model sits exactly where it was, occluded or not.
 
-`Entity.isAnchored` reports that same state, and the status label is driven from it so the label
-and the models can never disagree.
+This is deliberately not the same question as "is the label allowed to say detected". The status
+label is still driven straight off `Entity.isAnchored`, so it correctly says "not detected"
+while the model keeps holding its place — the two are allowed to disagree on purpose. See
+"Status" in the project root `CLAUDE.md`.
 
-Coming back is not the reverse of going away. That card's `heldPose` is cleared on loss, so
-re-appearing takes the new pose **outright** rather than gliding to it from wherever the card
-used to be.
+Coming back is not a separate case: `heldPose` is left untouched by tracking loss, so the next
+tracked pose glides in from it exactly like any other movement (see
+[smoothing.md](smoothing.md)). A card that reappears where it was reads as having never moved; a
+card that reappears somewhere else glides there over about half a second rather than snapping.
 
-All of this is per branch: one card leaving the frame hides its own model and clears its own
-held pose, and the cards still visible carry on untouched.
+All of this is per branch: one card losing tracking only stops writes to its own `pivot`, and the
+cards still tracked carry on untouched.
 
 ## Render loop, not session delegate
 

@@ -10,7 +10,9 @@ one.
 3. RealityKit renders, on each tracked card, the `.usdz` in the bundle **named after that card's
    reference image** — `postcard` in the group draws `postcard.usdz`.
 4. The model stays attached to its card while the card is visible: move or tilt the card and the
-   model follows. There are no gestures on the model itself.
+   model follows.
+5. One gesture exists: pinch to pick up a `SeaSnail*` entity inside a model and drag it — see
+   `docs/interaction.md`. Nothing else on the model responds to touch.
 
 Adding a card is two files — an image in the resource group and a `.usdz` of the same name —
 and no code change. Nothing in the source names an individual card.
@@ -22,21 +24,28 @@ Everything is first-party Apple. No third-party dependencies.
 | Piece | Framework |
 |---|---|
 | App shell, button, presentation | SwiftUI |
-| Image detection and tracking | ARKit (`ARImageTrackingConfiguration`) |
+| Image detection and tracking | ARKit (`ARWorldTrackingConfiguration`, `detectionImages`) |
 | 3D rendering and anchoring | RealityKit (`ARView`, `AnchorEntity(.image)`) |
+| Hand-pose detection for pinch pickup | Vision (`DetectHumanHandPoseRequest`) |
 | 3D authoring and animation | Reality Composer Pro (bundled with Xcode) |
 
-`ARImageTrackingConfiguration` is used rather than world tracking because the cards are
-expected to be held in the hand. It re-tracks the images every frame instead of dropping a
-persistent world anchor that would drift. `maximumNumberOfTrackedImages` is set to the number
-of reference images in the group, so every card in view is posed in the same frame.
+`ARWorldTrackingConfiguration` is used rather than plain image tracking because image tracking
+has no world origin: a card's pose comes back relative to the current camera view, not the
+room, since ARKit runs no visual-inertial odometry under that configuration. Panning the phone
+past a stationary card then reads to the smoothing filter as the card moving — visible drift
+that only settles once the phone stops. World tracking gives the image anchor a room-fixed
+pose, so a still card yields a still target and the dead-band filter works as designed.
+`maximumNumberOfTrackedImages` must still be set explicitly to the number of reference images —
+it defaults to 0 on this configuration, under which a detected card is posed once and frozen
+there, the exact "anchor left where the card used to be" failure image tracking was originally
+chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
 | `PostcardAR/ContentView.swift` | Start button, and the camera screen's status overlay |
-| `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, and model loading |
+| `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and pinch pickup |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
 | `README.md` | What the project is, how to run it, how to add a card |
@@ -51,6 +60,7 @@ Documentation is split by area, and each file owns its topic:
 | `docs/tracking.md` | Session, anchors, entity hierarchy, render loop, tracking loss |
 | `docs/smoothing.md` | The dead band and glide filter, and its three constants |
 | `docs/app-shell.md` | SwiftUI, the `UIViewRepresentable` bridge, the status panel |
+| `docs/interaction.md` | Pinch pickup: Vision hand-pose sampling, grab/drag/release, tuning |
 | `docs/troubleshooting.md` | Symptom → cause, starting from the status panel |
 
 The Xcode target uses a synchronized folder group, so any file added under `PostcardAR/`
@@ -65,9 +75,12 @@ One branch per reference image, all added to the scene up front. An image anchor
 until ARKit tracks its image, so cards that are not on camera cost nothing.
 
 ```
-AnchorEntity(.image)   <- ARKit rewrites this transform every frame. Never modify it.
-  └── pivot            <- we write a smoothed world pose here, every rendered frame
+worldRoot (static)     <- AnchorEntity(world: .zero), added once, never written to
+  └── pivot            <- we write a smoothed world pose here, only while the card is tracked
         └── model      <- <image name>.usdz, animations play here
+
+AnchorEntity(.image)   <- ARKit rewrites this transform every frame. Never modify it, never
+                          parent anything visible under it — see "Tracking loss" below.
 ```
 
 The `Coordinator` keeps these in a `cards` array of `Card` structs — name, printed width,
@@ -101,10 +114,14 @@ of the card's surface.
 
 ## Tracking loss
 
-Not handled in code. RealityKit stops drawing an `.image` anchor's children when that card is
-not tracked, which is the wanted behaviour, and `Entity.isAnchored` reports it for the UI
-label. On reappearance the card's `heldPose` is nil, so the pose is taken outright instead of
-glided to. All of this is per card: losing one leaves the others alone.
+Each card's `pivot` hangs off one shared, static `worldRoot` anchor rather than off that card's
+own image anchor — so RealityKit's "hide an untracked anchor's children" behaviour never reaches
+the model. The render loop just stops writing that card's `pivot` while it is untracked
+(occluded by a hand, off camera), and it holds its last pose. `heldPose` is left alone too, so
+whenever tracking resumes the new pose glides in from there like any other movement — no special
+case for reappearance. `Entity.isAnchored` still drives the status label directly, so the label
+can say "not detected" while the model keeps holding its place; that disagreement is intentional,
+not a bug — see `docs/tracking.md`. All of this is per card: losing one leaves the others alone.
 
 ## Render loop, not session delegate
 
@@ -143,13 +160,14 @@ from feeling mushy. Three constants, at the top of `PostcardARView.swift`; stead
 means a larger dead band or a smaller smoothing factor.
 
 There is deliberately no third "snap" regime for large jumps. `smoothingFactor` of 0.15 at 60 fps
-closes a 50 cm jump in about half a second, and the case that would need instant application —
-the card reappearing somewhere new — is already covered by `heldPose` being cleared on tracking
-loss, which makes the next pose land outright.
+closes a 50 cm jump in about half a second, which is fast enough that even a card reappearing
+somewhere new just glides there — see "Tracking loss" above for why `heldPose` survives loss
+rather than being cleared.
 
-`ARStatus.detectedImages` is rebuilt each frame from `anchor.isAnchored`, so the label and the
-models always agree. Guard that write with an inequality check: `@Observable` notifies on every
-set without comparing, and this runs once a frame.
+`ARStatus.detectedImages` is rebuilt each frame from `anchor.isAnchored` — live tracking state,
+not what's on screen. The model itself can lag behind that label during a brief occlusion by
+design. Guard the write with an inequality check regardless: `@Observable` notifies on every set
+without comparing, and this runs once a frame.
 
 ## Status
 
@@ -157,6 +175,16 @@ set without comparing, and this runs once a frame.
 and `errors`. Errors are a list, not one string: with several models, a missing `.usdz` must not
 hide the next one. `report(_:)` drops repeats, because `didFailWithError` can fire on every
 frame and the panel is not a log.
+
+## Pinch pickup
+
+The one gesture: pinch to grab a `SeaSnail*` entity and drag it. Runs on Vision
+(`DetectHumanHandPoseRequest`), read from the same `capturedImage` ARKit is already tracking
+cards against, sampled at 15 Hz — independent of and slower than the 60 fps render loop, and
+guarded against overlapping inference. Grab is nearest-snail-by-screen-projection within
+`pinchPickRadius`, not a hit test; a held snail tracks the pinch point at fixed camera depth;
+release fades it out. Full mechanism, including the open/close debounce and the Vision
+coordinate-space gotcha, in `docs/interaction.md`.
 
 ## Model scale
 

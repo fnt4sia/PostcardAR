@@ -4,12 +4,13 @@
 //
 //  Camera view that finds printed cards and stands a 3D model on each of them.
 //
-//  Every reference image in the AR resource group is one card, and each card owns a branch of
-//  the scene:
+//  Every reference image in the AR resource group is one card:
 //
-//      AnchorEntity(.image)   ARKit rewrites this every frame with that card's raw pose
-//        └── pivot            we write a filtered pose here, every rendered frame
+//      worldRoot (static)     one shared anchor, added once, never rewritten
+//        └── pivot            filtered world pose, written only while the card is tracked
 //              └── model      <image name>.usdz, scaled to that card at load time
+//
+//      AnchorEntity(.image)   ARKit's raw per-frame pose — read from, never written to
 //
 //  ARKit owns the anchors, we own the pivots, and nothing else touches either. All of it runs on
 //  the main thread: the render loop fires there, and the session delegate uses the main queue
@@ -20,6 +21,8 @@ import ARKit
 import Combine
 import RealityKit
 import SwiftUI
+import UIKit
+import Vision
 
 // MARK: - Tuning
 
@@ -32,7 +35,7 @@ private let resourceGroupName = "AR Resources"
 /// Model width as a fraction of its card's width — `1.0` is exactly as wide as the card.
 /// The only dial for model size, because `fit(_:toCardWidth:named:)` measures the model at load
 /// time and makes its authored scale irrelevant.
-private let modelWidthRelativeToCard: Float = 1.0
+private let modelWidthRelativeToCard: Float = 2.0
 
 /// Pose filtering, applied in `hold(_:)`. Movement smaller than a dead band is treated as
 /// tracking noise and refused outright; anything larger is glided toward by `smoothingFactor`
@@ -40,9 +43,30 @@ private let modelWidthRelativeToCard: Float = 1.0
 ///
 /// The dead bands are what stop the idle shiver — reach for those first. Lowering
 /// `smoothingFactor` calms real movement instead, at the cost of lag.
-private let positionDeadBand: Float = 0.002         // metres
+private let positionDeadBand: Float = 0.001         // metres
 private let rotationDeadBand: Float = 2 * .pi / 180 // radians
 private let smoothingFactor: Float = 0.15
+
+/// Hand-pose sampling rate, deliberately slower than the render loop — see `updatePinchDetection()`.
+private let handPoseSampleInterval: TimeInterval = 1.0 / 15.0
+
+/// Thumb-to-index distance (normalized by hand size) marking closed/open. Two thresholds, not
+/// one, to avoid chatter right at the pinch boundary.
+private let pinchCloseRatio: Float = 0.12
+private let pinchOpenRatio: Float = 0.2
+
+/// Joint confidence floor — below this a hand-pose point is noise, not signal.
+private let jointConfidenceMinimum: Float = 0.3
+
+/// How close, in points, the pinch point must land to a snail's projected position to grab it.
+private let pinchPickRadius: CGFloat = 80
+
+/// Per-frame opacity step for a released snail — ~0.4 s fade at ~60 fps.
+private let pinchFadeStep: Float = 1.0 / 24.0
+
+/// If something's held and Vision loses the hand for this long, force a release — otherwise a
+/// hand that lifts out of frame mid-grab never produces the "opened" sample to let go with.
+private let handPoseLossTimeout: TimeInterval = 0.3
 
 // MARK: - Status
 
@@ -62,6 +86,12 @@ final class ARStatus {
     /// Collected rather than replaced: with several models, one missing `.usdz` must not hide
     /// the next.
     var errors: [String] = []
+
+    /// Screen point of the crosshair overlay; `nil` while no hand is confidently in view.
+    var pinchPoint: CGPoint?
+
+    /// How closed the current pinch is, `0` (open) to `1` (closed) — drives the crosshair's ring.
+    var pinchProgress: Float = 0
 }
 
 // MARK: - View
@@ -79,8 +109,8 @@ struct PostcardARView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> ARView {
-        // `automaticallyConfigureSession` would helpfully replace our image-tracking
-        // configuration with ARView's default world-tracking one.
+        // `automaticallyConfigureSession` would helpfully replace our configuration with its own
+        // default one — plane detection, environment texturing, none of which we want.
         let arView = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
         context.coordinator.start(in: arView)
         return arView
@@ -119,19 +149,14 @@ extension PostcardARView {
             /// and the model ends up pinned at the origin, which on screen reads as a freeze.
             let anchor: AnchorEntity
 
-            /// Ours. A plain `Entity` has no anchoring component, so what we write to it stays,
-            /// and the model inherits the filtered pose instead of the raw one.
+            /// Ours. A plain `Entity` has no anchoring component, so what we write to it stays.
+            /// Parented to the shared `worldRoot`, not to `anchor` — keeps rendering at its last
+            /// pose while the card is occluded, instead of vanishing with the anchor.
             let pivot: Entity
 
-            /// Where this card's model is currently being held, in world space.
-            ///
-            /// Kept here rather than read back off `pivot`, because the pivot is a child of the
-            /// jittering anchor: its world transform moves with the card on any frame we do not
-            /// steer it. Reading it back would compare each new pose against noise rather than
-            /// against our own last output.
-            ///
-            /// Cleared on tracking loss, so the card's next appearance is taken outright instead
-            /// of glided to from wherever the card used to be.
+            /// Where this card's model is currently being held, in world space. Compared against
+            /// on re-detection instead of read back off `pivot`, and left untouched on tracking
+            /// loss so the next pose glides in like any other movement, rather than snapping.
             var heldPose: Transform?
         }
 
@@ -143,20 +168,57 @@ extension PostcardARView {
         /// Dropping this cancels the render-loop subscription, so it has to be held.
         private var frameSubscription: (any Cancellable)?
 
+        /// For projecting/raycasting and reading `session.currentFrame` in the pinch code below.
+        private weak var arView: ARView?
+
+        /// Every `SeaSnail*` entity across every loaded model, flattened.
+        private var snails: [Entity] = []
+
+        /// The snail being dragged, and the camera distance it was grabbed at (held constant for
+        /// the drag). `nil` also gates pickup to one at a time.
+        private var held: (entity: Entity, depth: Float)?
+
+        /// Released snails, fading toward `opacity == 0` before `removeFromParent()`.
+        private var fading: [(entity: Entity, opacity: Float)] = []
+
+        /// Reused across samples rather than rebuilt each time.
+        private let handPoseRequest: DetectHumanHandPoseRequest = {
+            var request = DetectHumanHandPoseRequest()
+            request.maximumHandCount = 1
+            return request
+        }()
+
+        /// Guards against overlapping inference and paces sampling to `handPoseSampleInterval`.
+        private var handPoseTaskInFlight = false
+        private var lastHandPoseSampleTime = Date.distantPast
+
+        /// Debounced open/closed pinch state — see `pinchCloseRatio`/`pinchOpenRatio`.
+        private var pinchClosed = false
+
+        /// Last time a sample confidently saw a hand — what `handPoseLossTimeout` counts against.
+        private var lastConfidentHandTime = Date.distantPast
+
+        /// Screen point of the most recent pinch sample; drag reuses it between samples.
+        private var pinchPoint: CGPoint?
+
+        /// `.soft` — firm grab, gentle let-go. `prepare()`d early to hide Taptic spin-up latency.
+        private var pinchHaptics: UIImpactFeedbackGenerator?
+
         init(status: ARStatus) {
             self.status = status
         }
 
-        /// Starts image tracking, builds an `anchor -> pivot` branch per reference image, and
-        /// begins loading their models.
+        /// Starts tracking, builds an `anchor -> pivot` branch per reference image, and begins
+        /// loading their models.
         func start(in arView: ARView) {
-            guard ARImageTrackingConfiguration.isSupported else {
-                report("Image tracking needs a real device, not the simulator.")
+            guard ARWorldTrackingConfiguration.isSupported else {
+                report("World tracking needs a real device, not the simulator.")
                 return
             }
 
-            // Image tracking rather than world tracking, because the cards are held in the hand.
-            // World tracking would detect one once and leave the anchor where the card *was*.
+            // World tracking, not image tracking: image tracking has no world origin, so panning
+            // past a stationary card reads to the filter as the card moving. World tracking gives
+            // the image anchor a room-fixed pose instead. See docs/tracking.md.
             let referenceImages = ARReferenceImage.referenceImages(
                 inGroupNamed: resourceGroupName,
                 bundle: nil
@@ -167,15 +229,22 @@ extension PostcardARView {
                 return
             }
 
-            let configuration = ARImageTrackingConfiguration()
-            configuration.trackingImages = referenceImages
-            // Allow every image in the group to be tracked in the same frame. ARKit keeps
-            // detecting past this limit; it just will not solve a pose for a further image until
-            // one of the tracked ones is lost.
+            let configuration = ARWorldTrackingConfiguration()
+            configuration.detectionImages = referenceImages
+            // Required, not cosmetic: defaults to 0, under which a detected image is posed once
+            // and frozen — the exact failure image tracking was chosen to avoid.
             configuration.maximumNumberOfTrackedImages = referenceImages.count
 
             arView.session.delegate = self // For errors only — see the note on the render loop.
             arView.session.run(configuration)
+
+            self.arView = arView
+            pinchHaptics = UIImpactFeedbackGenerator(style: .soft, view: arView)
+
+            // Fixed at the world origin and never rewritten — a static parent so pivots stay in
+            // the visible tree even when their own image anchor goes untracked.
+            let worldRoot = AnchorEntity(world: .zero)
+            arView.scene.addAnchor(worldRoot)
 
             // Every anchor goes in up front. An image anchor draws nothing and costs nothing
             // until ARKit tracks its image, so the ones not on camera are free.
@@ -188,7 +257,7 @@ extension PostcardARView {
 
                 let anchor = AnchorEntity(.image(group: resourceGroupName, name: name))
                 let pivot = Entity()
-                anchor.addChild(pivot)
+                worldRoot.addChild(pivot)
                 arView.scene.addAnchor(anchor)
 
                 cards.append(Card(
@@ -242,13 +311,10 @@ extension PostcardARView {
             var detected: [String] = []
 
             for index in cards.indices {
-                // RealityKit stops drawing an image anchor's children whenever its card is not
-                // tracked — which is the behaviour we want, and needs no code. `isAnchored`
-                // reports that same state, so the label and the models can never disagree.
-                guard cards[index].anchor.isAnchored else {
-                    cards[index].heldPose = nil
-                    continue
-                }
+                // While untracked, the pivot is simply left alone — it keeps rendering at
+                // `heldPose` since it lives under `worldRoot`, not this card's own anchor. The
+                // label can say "not detected" while the model keeps holding its place.
+                guard cards[index].anchor.isAnchored else { continue }
 
                 detected.append(cards[index].name)
                 hold(&cards[index])
@@ -259,6 +325,10 @@ extension PostcardARView {
             if status.detectedImages != detected {
                 status.detectedImages = detected
             }
+
+            updatePinchDetection()
+            updateHeldSnail()
+            updateFadingSnails()
         }
 
         /// Writes one card's pivot in world space, filtered — dead band, then glide.
@@ -314,6 +384,145 @@ extension PostcardARView {
             2 * acos(min(abs(simd_dot(a.vector, b.vector)), 1))
         }
 
+        // MARK: Pinch pickup
+
+        /// Samples the camera for a hand pinch, at most once every `handPoseSampleInterval`.
+        /// Reads `session.currentFrame` from the render loop, same ARFrame-retention reason as
+        /// the pose filter above — only `capturedImage` crosses into the `Task`, never the frame.
+        private func updatePinchDetection() {
+            guard !handPoseTaskInFlight,
+                  Date().timeIntervalSince(lastHandPoseSampleTime) >= handPoseSampleInterval,
+                  let arView, let frame = arView.session.currentFrame
+            else { return }
+
+            lastHandPoseSampleTime = Date()
+            handPoseTaskInFlight = true
+
+            let pixelBuffer = frame.capturedImage
+            let viewportSize = arView.bounds.size
+            let orientation = arView.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
+            let displayTransform = frame.displayTransform(for: orientation, viewportSize: viewportSize)
+
+            // @MainActor so mutations below land on the same thread `onRenderFrame` runs on;
+            // `perform(on:orientation:)` still suspends off it for the actual inference.
+            Task { @MainActor in
+                defer { handPoseTaskInFlight = false }
+
+                // No orientation hint — Vision then leaves joints in `capturedImage`'s own
+                // coordinate space, which is what `displayTransform` below expects. A hint would
+                // hand back already-rotated coordinates and double-rotate the point.
+                guard
+                    let hand = try? await handPoseRequest.perform(on: pixelBuffer).first,
+                    let thumb = hand.joint(for: .thumbTip), thumb.confidence > jointConfidenceMinimum,
+                    let index = hand.joint(for: .indexTip), index.confidence > jointConfidenceMinimum,
+                    let wrist = hand.joint(for: .wrist), wrist.confidence > jointConfidenceMinimum,
+                    let knuckle = hand.joint(for: .indexMCP), knuckle.confidence > jointConfidenceMinimum
+                else {
+                    // No confident hand this sample. Hide the crosshair immediately; a held
+                    // snail only force-releases after `handPoseLossTimeout`, so one dropped
+                    // sample mid-hold doesn't drop it.
+                    status.pinchPoint = nil
+                    if pinchClosed, Date().timeIntervalSince(lastConfidentHandTime) >= handPoseLossTimeout {
+                        pinchClosed = false
+                        releaseHeld()
+                    }
+                    return
+                }
+
+                lastConfidentHandTime = Date()
+
+                let handScale = wrist.distance(to: knuckle)
+                guard handScale > 0 else { return }
+                let ratio = Float(thumb.distance(to: index) / handScale)
+
+                // Vision's normalized point is bottom-left origin; ARKit's display transform
+                // expects top-left, hence the manual flip before applying it.
+                let midpoint = CGPoint(
+                    x: (thumb.location.x + index.location.x) / 2,
+                    y: 1 - (thumb.location.y + index.location.y) / 2
+                ).applying(displayTransform)
+                let screenPoint = CGPoint(
+                    x: midpoint.x * viewportSize.width,
+                    y: midpoint.y * viewportSize.height
+                )
+
+                evaluatePinch(ratio: ratio, at: screenPoint)
+            }
+        }
+
+        /// Debounces one hand-pose sample into a grab or release, and drives the crosshair
+        /// overlay's position and ring fill.
+        private func evaluatePinch(ratio: Float, at point: CGPoint) {
+            pinchPoint = point
+            status.pinchPoint = point
+            status.pinchProgress = min(max((pinchOpenRatio - ratio) / (pinchOpenRatio - pinchCloseRatio), 0), 1)
+
+            if !pinchClosed, ratio < pinchOpenRatio {
+                pinchHaptics?.prepare() // warm the Taptic Engine before the grab is confirmed
+            }
+
+            if !pinchClosed, ratio < pinchCloseRatio {
+                pinchClosed = true
+                attemptGrab(at: point)
+            } else if pinchClosed, ratio > pinchOpenRatio {
+                pinchClosed = false
+                releaseHeld()
+            }
+        }
+
+        /// Picks the nearest snail to the pinch point by projected screen position, not a hit
+        /// test (needs collision shapes, wrong node in the hierarchy). No-op if already holding.
+        private func attemptGrab(at point: CGPoint) {
+            guard held == nil, let arView, let cameraTransform = arView.session.currentFrame?.camera.transform
+            else { return }
+            let cameraPosition = cameraTransform.columns.3
+
+            let nearest = snails
+                .compactMap { snail -> (Entity, CGFloat)? in
+                    guard let projected = arView.project(snail.position(relativeTo: nil)) else { return nil }
+                    return (snail, hypot(projected.x - point.x, projected.y - point.y))
+                }
+                .filter { $0.1 < pinchPickRadius }
+                .min { $0.1 < $1.1 }
+
+            guard let (snail, _) = nearest else { return }
+            let depth = simd_distance(SIMD3(cameraPosition.x, cameraPosition.y, cameraPosition.z),
+                                       snail.position(relativeTo: nil))
+            held = (snail, depth)
+            pinchHaptics?.impactOccurred()
+        }
+
+        /// Moves the held snail to the last pinch point every rendered frame — same idiom as
+        /// `hold(_:)`. Depth stays fixed from grab time, so it tracks the screen at constant depth.
+        private func updateHeldSnail() {
+            guard let (entity, depth) = held, let point = pinchPoint,
+                  let arView, let ray = arView.ray(through: point)
+            else { return }
+            entity.setPosition(ray.origin + ray.direction * depth, relativeTo: nil)
+        }
+
+        /// Lets go of the held snail — moves it into `fading`; it never returns to `snails`.
+        private func releaseHeld() {
+            guard let (entity, _) = held else { return }
+            held = nil
+            fading.append((entity, 1))
+            pinchHaptics?.impactOccurred(intensity: 0.4) // softer than the grab: this end is expected
+        }
+
+        /// Steps every fading snail's opacity down and removes it at zero. Manual, not
+        /// `AnimationResource` — reuses this loop instead of a second animation subscription.
+        private func updateFadingSnails() {
+            for index in fading.indices.reversed() {
+                fading[index].opacity -= pinchFadeStep
+                if fading[index].opacity <= 0 {
+                    fading[index].entity.removeFromParent()
+                    fading.remove(at: index)
+                } else {
+                    fading[index].entity.components.set(OpacityComponent(opacity: fading[index].opacity))
+                }
+            }
+        }
+
         // MARK: Models
 
         /// Loads one `.usdz` per card — the file named after that card's reference image — off
@@ -331,6 +540,7 @@ extension PostcardARView {
                         removeCameras(from: model)
                         fit(model, toCardWidth: card.width, named: card.name)
                         card.pivot.addChild(model)
+                        snails.append(contentsOf: collectSnails(in: model))
                         status.loadedModels += 1
                     } catch {
                         report("Could not load \(card.name).usdz: \(error.localizedDescription)")
@@ -354,6 +564,16 @@ extension PostcardARView {
             if entity.components.has(PerspectiveCameraComponent.self) {
                 entity.removeFromParent()
             }
+        }
+
+        /// Finds every entity named `SeaSnail*` in a loaded model — the ones pinch pickup responds
+        /// to. `Coral` and everything else just doesn't match the prefix.
+        private func collectSnails(in entity: Entity) -> [Entity] {
+            var found = entity.name.hasPrefix("SeaSnail") ? [entity] : []
+            for child in entity.children {
+                found.append(contentsOf: collectSnails(in: child))
+            }
+            return found
         }
 
         /// Scales a model to a fixed fraction of its own card's width and sits it centred on that

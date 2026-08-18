@@ -102,6 +102,8 @@ final class ARStatus {
     var loadedModels = 0
     var totalImages = 0
     var errors: [String] = []
+    var pinchPoint: CGPoint?
+    var pinchProgress: Float = 0
 }
 ```
 
@@ -181,7 +183,8 @@ presented view, so the screen can close itself without knowing who presented it 
 binding back to it.
 
 `.overlay` stacks a view on top of another, aligned within its frame — the same idea as `ZStack`,
-but anchored to this specific view's bounds.
+but anchored to this specific view's bounds. A third overlay places the pinch crosshair at
+`status.pinchPoint` the same way — see [interaction.md](interaction.md).
 
 ## Part 3 — Bridging to UIKit
 
@@ -256,10 +259,11 @@ sequenceDiagram
     UI->>UI: body recomputes
 ```
 
-The status list is published from the render-loop handler, so it and the models are reading the
-same thing on the same frame and cannot disagree. `Entity.isAnchored` is precisely "RealityKit is
-currently drawing this anchor's children", which is the question the user is actually asking when
-they look at the label.
+`Entity.isAnchored` is precisely "ARKit is tracking this card right now" — the label answers that
+question exactly. The model does not: it keeps rendering at its last held pose while a card goes
+untracked (occluded, say), rather than disappearing with the label — see "Tracking loss" in
+[tracking.md](tracking.md). The two are allowed to disagree by design: the label reports live
+tracking, the model stays put through a brief loss of it.
 
 One detail that matters at 60 fps:
 

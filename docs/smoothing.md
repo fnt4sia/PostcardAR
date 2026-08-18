@@ -10,8 +10,8 @@ point of looking broken.
 
 ## The cause
 
-`ARImageTrackingConfiguration` re-solves each card's pose **from scratch on every frame**. It
-keeps no history and does no filtering; frame 200's answer owes nothing to frame 199's. Each
+Image detection re-solves each card's pose **from scratch on every frame**. It keeps no history
+and does no filtering of its own; frame 200's answer owes nothing to frame 199's. Each
 solution is a least-squares fit to feature points found in a noisy, motion-blurred,
 rolling-shutter camera image, so each one lands a little differently. That spread is the shiver.
 
@@ -107,9 +107,10 @@ does:
 | A 50 cm jump in one frame | Closed to within 5 mm in 29 frames, about 480 ms |
 
 An 8 cm *per-frame* delta means the card is moving at nearly 5 m/s, which is not handling, it is
-throwing. In practice only re-detection produces a jump that large — and re-detection is already
-handled, because `heldPose` is cleared on tracking loss and the next pose is taken outright
-rather than glided to.
+throwing. In practice only re-detection produces a jump that large, and a 50 cm jump on
+re-detection already glides in cleanly per the table above — `heldPose` survives tracking loss
+(see [tracking.md](tracking.md#tracking-loss)) precisely so re-detection is just another glide,
+not a special case.
 
 So the third regime was two constants and a branch that bought nothing. If a fly-in ever does
 show up on screen, the fix is to restore it, not to lower `smoothingFactor`.
@@ -120,7 +121,7 @@ All three constants sit at the top of `PostcardARView.swift` and apply to every 
 
 | Constant | Default | Raise it to… |
 |---|---|---|
-| `positionDeadBand` | 2 mm | Kill more positional shiver, at the cost of ignoring small real nudges |
+| `positionDeadBand` | 1 mm | Kill more positional shiver, at the cost of ignoring small real nudges |
 | `rotationDeadBand` | 2° | Kill more rotational shiver, same trade |
 | `smoothingFactor` | 0.15 | Track more responsively (**lower** it for a calmer, laggier model) |
 
