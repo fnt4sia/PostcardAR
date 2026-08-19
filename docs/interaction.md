@@ -126,6 +126,12 @@ subview of `arView` itself, moved every sample by `updateCrosshair(at:progress:)
 `PostcardARView`. A subview of `arView` shares its coordinate space with `arView.ray(through:)`
 (the drag) by construction, instead of by two frameworks' layout systems happening to agree.
 
+`updateCrosshair` also hides it whenever `game.phase != .playing`, on top of hiding for a `nil`
+point — it means "this is where the pinch lands", which is a lie on every other screen, including
+this run's own instructions/countdown/grace/result phases. `updatePinchDetection()` itself keeps
+sampling regardless of phase, because the occlusion lock's hand-presence detection (below) needs
+to keep running outside `.playing` too; only the crosshair and the grab/release logic are gated.
+
 **Filtering: One Euro, not a fixed EMA.** `updatePinchDetection()` runs the raw point through
 `pinchPointFilter` (a `PinchPointFilter`, two `OneEuroFilter`s — one per axis, see their doc
 comments for why per-axis) once, at sample time, and writes the result straight to `pinchPoint`,
@@ -172,10 +178,13 @@ and re-projects `pinchPoint` into a world-space ray via `arView.ray(through:)`, 
 snail at the fixed grab depth along that ray. Fixed depth means the snail tracks the screen
 point at constant distance, rather than sliding toward or away from the camera.
 
-**Release** (`releaseHeld()`) moves the entity into `fading` rather than deleting it immediately.
-`updateFadingSnails()` steps its opacity down by `pinchFadeStep` each frame and **hides** it at
-zero — a plain per-frame loop rather than `AnimationResource`, since the render loop is already
-iterating every frame regardless.
+**Release** (`releaseHeld()`) first checks whether this is actually a put-back: close enough to the
+snail's `home` slot (`pinchSnapRadius`) and the run still `.playing`. If so it glides home via
+`Entity.move(to:relativeTo:duration:)`, reverses the score, and clears `removed` — see "Scoring,
+and putting the snails back" in [simulation.md](simulation.md) for the full undo path. Otherwise
+it moves the entity into `fading` rather than deleting it immediately: `updateFadingSnails()` steps
+its opacity down by `pinchFadeStep` each frame and **hides** it at zero — a plain per-frame loop
+rather than `AnimationResource`, since the render loop is already iterating every frame regardless.
 
 Hidden, not `removeFromParent()`: Play Again needs the same snails back on the same coral, and
 keeping them in the tree makes that a transform reset rather than a second load of a model already
@@ -192,17 +201,17 @@ would stay stuck held forever.
 up through the camera image. It also skips snails already marked `removed`, so a fading snail
 cannot be re-grabbed on its way out.
 
-**Scoring happens here, not at the release.** A grabbed snail always ends up removed — there is no
-putting one back — so the grab is the moment it is committed, and the moment the haptic fires.
+**Scoring happens at the grab, not the release** — unless the release turns out to be a put-back,
+in which case it is reversed. See "Scoring, and putting the snails back" in
+[simulation.md](simulation.md).
 
 ## Hand presence also locks the cards
 
-Each sample updates two separate clocks, and the difference between them is the whole reason the
-lock works at all:
+Two separate clocks, and the difference between them is the whole reason the lock works at all:
 
 | Clock | Set when | Window | Effect |
 |---|---|---|---|
-| `lastConfidentHandTime` | all four pinch joints clear `jointConfidenceMinimum` | `handPoseLossTimeout`, 0.3 s | a held snail force-releases |
+| `lastPinchEvaluationTime` | `evaluatePinch(ratio:at:)` actually runs — both tips and the wrist/knuckle pair all confident | `handPoseLossTimeout`, 0.3 s | a held snail force-releases (see "Forced release" above) |
 | `lastHandSeenTime` | Vision returned *any* hand above `handPresenceConfidence` (0.1, whole-observation) | `handPresenceTimeout`, 1.0 s | card models already on screen stay on screen, frozen, though ARKit has lost the card |
 
 **Presence is a looser question than pinching, and asking it the strict way is a bug.** A hand
@@ -249,8 +258,13 @@ a showcase card": `attemptGrab(at:)` has nothing to find on one, with no extra t
 
 `pinchHaptics` is a single `UIImpactFeedbackGenerator(style: .soft)`, `prepare()`-d as the ratio
 first crosses `pinchOpenRatio` while open — before the grab is confirmed — to hide the Taptic
-Engine's spin-up latency. `impactOccurred()` fires full-strength on grab, `intensity: 0.4` on
-release: softer because a release is expected, a grab is the moment that needs to feel confirmed.
+Engine's spin-up latency. `impactOccurred()` fires full-strength on grab, `intensity: 0.4` on a
+release that fades the snail away: softer because that release is expected, a grab is the moment
+that needs to feel confirmed.
+
+A snap-back release fires `snapHaptics`, a separate `UINotificationFeedbackGenerator`, instead —
+`.notificationOccurred(.success)` rather than a third `.impact` intensity, so "put back, not
+collected" reads as its own kind of event rather than one more shade of grab/release.
 
 ## Tuning
 
@@ -280,3 +294,7 @@ elevated for longer after real motion, not shorter). Leave it at the reference d
 sample can be trusted — lower it further if the ring/release still stalls at close range, raise
 it if release starts firing off a `wrist`/`indexMCP` read that's really too poor to trust. See
 "Reading the pinch" above.
+
+`pinchSnapRadius` is how close a release has to land to the snail's home slot to count as a
+put-back instead of a collect — raise it if a light release near the coral still scores, lower it
+if a deliberate drag-away snaps back unwanted. `pinchSnapDuration` is just the glide's length.

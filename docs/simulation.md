@@ -115,12 +115,28 @@ them — the overlays read the whole-second properties (`secondsRemaining`, `cou
 ## Scoring, and putting the snails back
 
 Score is `+1` per drupella snail picked off, counted in `attemptGrab(at:)` rather than on release.
-A grabbed snail always ends up removed — there is no putting one back — so the grab is the moment
-it is committed, it is the moment the haptic fires, and it avoids the awkward case of a snail still
-in hand when the buzzer goes.
+A grabbed snail is committed the instant it is picked up — that is the moment the haptic fires —
+which avoids the awkward case of a snail still in hand when the buzzer goes.
 
 Grabbing is gated on `phase == .playing`. Instructions, countdown, grace and the result screen all
 leave the model on camera, and pinching through any of them would otherwise score.
+
+**Except when the grab immediately turns out to be a put-back.** `releaseHeld()` checks the snail's
+distance from its `home` slot against `pinchSnapRadius`, and *also* that `phase` is still
+`.playing` — the same gate `attemptGrab(at:)` itself requires. Both true: the snail glides home via
+`Entity.move(to:relativeTo:duration:)`, `game.unscored()` reverses the point, and `removed` clears
+so it is grabbable again. Either false — dropped further off, or the run ended mid-drag — and it
+falls through to the ordinary release below, keeping the point. The phase re-check exists so an
+undo can't land after the run it belongs to has already ended, mirroring why the grab itself needs
+that same gate.
+
+`GameSession.unscored()` mirrors `scored()` exactly: `guard phase == .playing, score > 0 else {
+return }`, `score -= 1`. Symmetric guard, so a late or stale call can't under/overshoot either.
+
+A snap-back release fires its own haptic — `UINotificationFeedbackGenerator.notificationOccurred
+(.success)`, not another `.impact` intensity — so "put back, not collected" reads as its own kind
+of event rather than a third shade of grab/release. See "Haptics" in
+[interaction.md](interaction.md).
 
 **Play Again needs the snails back**, which is why a released snail is hidden rather than deleted:
 

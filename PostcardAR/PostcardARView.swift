@@ -100,6 +100,15 @@ private let pinchPickRadius: CGFloat = 80
 /// Per-frame opacity step for a released snail — ~0.4 s fade at ~60 fps.
 private let pinchFadeStep: Float = 1.0 / 24.0
 
+/// How close, in metres, a released snail must be to its home slot to snap back — put down,
+/// not collected — instead of fading away scored. Roughly a fifth of a model's authored width
+/// (`modelWidthRelativeToCard`) — close enough that "let go right on the coral" reads as
+/// intentional, far enough that a light release mid-drag doesn't feel sticky.
+private let pinchSnapRadius: Float = 0.04
+
+/// How long the snap-back glide takes, via `Entity.move(to:relativeTo:duration:)`.
+private let pinchSnapDuration: TimeInterval = 0.2
+
 /// If something's held and Vision loses the hand for this long, force a release — otherwise a
 /// hand that lifts out of frame mid-grab never produces the "opened" sample to let go with.
 private let handPoseLossTimeout: TimeInterval = 0.3
@@ -357,9 +366,10 @@ extension PostcardARView {
         /// models are never collected, which is the whole of "no pinch on a showcase card".
         private var snails: [Snail] = []
 
-        /// The snail being dragged, and the camera distance it was grabbed at (held constant for
+        /// The snail being dragged — its index into `snails` (so release can reach its `home`
+        /// and flip `removed`) — and the camera distance it was grabbed at (held constant for
         /// the drag). `nil` also gates pickup to one at a time.
-        private var held: (entity: Entity, depth: Float)?
+        private var held: (index: Int, depth: Float)?
 
         /// Released snails, fading toward `opacity == 0` before being hidden.
         private var fading: [(entity: Entity, opacity: Float)] = []
@@ -392,16 +402,12 @@ extension PostcardARView {
         /// Displayed pinch point — crosshair and drag both read this, set from each raw sample
         /// after `pinchPointFilter` damps it. No render-loop glide stage: gliding toward a target
         /// that itself only moves at `handPoseSampleInterval` (15 Hz) reads as steady-state lag.
-        /// Last sample whose four pinch joints all resolved — what `handPoseLossTimeout` counts
-        /// against, so a hand that leaves mid-grab eventually drops what it was holding.
-        private var lastConfidentHandTime = Date.distantPast
+        private var pinchPoint: CGPoint?
 
         /// Last sample that saw a hand at all, however poorly resolved — what the occlusion lock
-        /// counts against. A hand covering a card reads well enough here and badly above.
+        /// counts against. A hand covering a card reads well enough here and badly above, so this
+        /// is gated on the loose `handPresenceConfidence`, not `jointConfidenceMinimum`.
         private var lastHandSeenTime = Date.distantPast
-
-        /// Screen point of the most recent pinch sample; drag reuses it between samples.
-        private var pinchPoint: CGPoint?
 
         /// One Euro filter state for `pinchPoint` — reset (fresh `PinchPointFilter()`) whenever
         /// the hand is lost, so re-acquiring doesn't glide in from a stale position/derivative.
@@ -414,12 +420,16 @@ extension PostcardARView {
         /// `.soft` — firm grab, gentle let-go. `prepare()`d early to hide Taptic spin-up latency.
         private var pinchHaptics: UIImpactFeedbackGenerator?
 
+        /// Fires once, on a snap-back release — a different generator, not another `.impact`
+        /// intensity, so "put back, not collected" reads as its own kind of event rather than a
+        /// third shade of grab/release.
+        private var snapHaptics: UINotificationFeedbackGenerator?
+
         /// `PinchCrosshair` hosted as a plain subview of `arView`, not a SwiftUI overlay — shares
         /// `arView.bounds`' coordinate space by construction, the same space `pinchPoint` and
         /// `arView.ray(through:)` use.
         private var crosshairHost: UIHostingController<PinchCrosshair>?
 
-        init(status: ARStatus) {
         init(status: ARStatus, game: GameSession) {
             self.status = status
             self.game = game
@@ -468,6 +478,7 @@ extension PostcardARView {
 
             self.arView = arView
             pinchHaptics = UIImpactFeedbackGenerator(style: .soft, view: arView)
+            snapHaptics = UINotificationFeedbackGenerator(view: arView)
             setUpCrosshair(in: arView)
 
             // Fixed at the world origin and never rewritten — a static parent so pivots stay in
@@ -718,10 +729,12 @@ extension PostcardARView {
         }
 
         /// Moves the crosshair to `point` (in `arView`'s own coordinate space — same as
-        /// `pinchPoint`) and updates its ring fill. `nil` hides it.
+        /// `pinchPoint`) and updates its ring fill. `nil`, or the run not being `.playing`,
+        /// hides it — it means "this is where the pinch lands", which is a lie on every other
+        /// screen (including a live run's own instructions/countdown/grace/result phases).
         private func updateCrosshair(at point: CGPoint?, progress: Float) {
             guard let host = crosshairHost else { return }
-            guard let point else {
+            guard let point, game.phase == .playing else {
                 host.view.isHidden = true
                 return
             }
@@ -776,6 +789,16 @@ extension PostcardARView {
                 // below expects.
                 let hand = try? await handPoseRequest.perform(on: pixelBuffer, orientation: imageOrientation).first
 
+                // Presence is a far looser question than pinching, and has to be asked first. A
+                // hand held flat over a card — the case the occlusion lock exists for — is
+                // usually a palm filling the frame with the wrist cropped off and the knuckles
+                // hidden behind the fingers: Vision still returns the hand, but the pinch-specific
+                // joints below do not all clear their threshold. Gating presence on those joints
+                // meant the lock never engaged in exactly the situation it was written for.
+                if let hand, hand.confidence > handPresenceConfidence {
+                    lastHandSeenTime = Date()
+                }
+
                 // Truly no hand is the only case that wipes state — see "Occlusion vs. no hand"
                 // in `docs/interaction.md`. A hand that's merely hard to read this sample isn't a
                 // hand that's gone.
@@ -824,33 +847,6 @@ extension PostcardARView {
                     // Neither tip readable this sample. Hold the last point rather than erasing
                     // it — same dead-band idiom as the card pose filter.
                     if pinchClosed, Date().timeIntervalSince(lastPinchEvaluationTime) >= handPoseLossTimeout {
-                // No orientation hint — Vision then leaves joints in `capturedImage`'s own
-                // coordinate space, which is what `displayTransform` below expects. A hint would
-                // hand back already-rotated coordinates and double-rotate the point.
-                let hands = (try? await handPoseRequest.perform(on: pixelBuffer)) ?? []
-
-                // Presence is a far looser question than pinching, and has to be asked first.
-                // A hand held flat over a card — the case the lock exists for — is usually a
-                // palm filling the frame with the wrist cropped off and the knuckles hidden
-                // behind the fingers: Vision still returns the hand, but the four joints below
-                // do not all clear their threshold. Gating presence on those joints meant the
-                // lock never engaged in exactly the situation it was written for.
-                if let hand = hands.first, hand.confidence > handPresenceConfidence {
-                    lastHandSeenTime = Date()
-                }
-
-                guard
-                    let hand = hands.first,
-                    let thumb = hand.joint(for: .thumbTip), thumb.confidence > jointConfidenceMinimum,
-                    let index = hand.joint(for: .indexTip), index.confidence > jointConfidenceMinimum,
-                    let wrist = hand.joint(for: .wrist), wrist.confidence > jointConfidenceMinimum,
-                    let knuckle = hand.joint(for: .indexMCP), knuckle.confidence > jointConfidenceMinimum
-                else {
-                    // No confident hand this sample. Hide the crosshair immediately; a held
-                    // snail only force-releases after `handPoseLossTimeout`, so one dropped
-                    // sample mid-hold doesn't drop it.
-                    status.pinchPoint = nil
-                    if pinchClosed, Date().timeIntervalSince(lastConfidentHandTime) >= handPoseLossTimeout {
                         pinchClosed = false
                         releaseHeld()
                     }
@@ -955,9 +951,10 @@ extension PostcardARView {
             let depth = simd_distance(SIMD3(cameraPosition.x, cameraPosition.y, cameraPosition.z),
                                        snail.position(relativeTo: nil))
             snails[index].removed = true
-            held = (snail, depth)
+            held = (index, depth)
             // Scored at the grab, not the release: a grabbed snail always ends up removed, so
             // this is the moment it is committed — and the moment the player feels the haptic.
+            // `releaseHeld()` can still undo both if it turns out to be a snap-back, not a pick.
             game.scored()
             pinchHaptics?.impactOccurred()
         }
@@ -965,19 +962,38 @@ extension PostcardARView {
         /// Moves the held snail to the last pinch point every rendered frame — same idiom as
         /// `hold(_:)`. Depth stays fixed from grab time, so it tracks the screen at constant depth.
         private func updateHeldSnail() {
-            guard let (entity, depth) = held, let point = pinchPoint,
+            guard let (index, depth) = held, let point = pinchPoint,
                   let arView, let ray = arView.ray(through: point)
             else { return }
-            entity.setPosition(ray.origin + ray.direction * depth, relativeTo: nil)
+            snails[index].entity.setPosition(ray.origin + ray.direction * depth, relativeTo: nil)
         }
 
-        /// Lets go of the held snail — moves it into `fading`. It stays in `snails` marked
-        /// `removed`, ungrabbable until `restoreSnails()` puts it back for the next run.
+        /// Lets go of the held snail. Close enough to its home slot, and the run hasn't ended out
+        /// from under it, reads as "put back" rather than "collected": it glides home via
+        /// RealityKit's own move animation, un-scores, and clears `removed` — same conditions
+        /// `attemptGrab(at:)` requires for a *grab*, so an undo can't outlive the run any more
+        /// than a pick can start after it. Otherwise it moves into `fading` as before, staying
+        /// `removed` and keeping the point until `restoreSnails()` puts it back for the next run.
         private func releaseHeld() {
-            guard let (entity, _) = held else { return }
+            guard let (index, _) = held else { return }
             held = nil
-            fading.append((entity, 1))
-            pinchHaptics?.impactOccurred(intensity: 0.4) // softer than the grab: this end is expected
+            let entity = snails[index].entity
+
+            var snapping = false
+            if game.phase == .playing, let parent = entity.parent {
+                let home = parent.convert(position: snails[index].home.translation, to: nil)
+                snapping = simd_distance(home, entity.position(relativeTo: nil)) < pinchSnapRadius
+            }
+
+            if snapping {
+                entity.move(to: snails[index].home, relativeTo: entity.parent, duration: pinchSnapDuration)
+                snails[index].removed = false
+                game.unscored()
+                snapHaptics?.notificationOccurred(.success)
+            } else {
+                fading.append((entity, 1))
+                pinchHaptics?.impactOccurred(intensity: 0.4) // softer than the grab: this end is expected
+            }
         }
 
         /// Steps every fading snail's opacity down and hides it at zero. Manual, not

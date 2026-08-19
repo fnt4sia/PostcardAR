@@ -270,13 +270,13 @@ in `docs/simulation.md`.
 ## Pinch pickup
 
 The one gesture, on simulation cards only: pinch to grab a `SeaSnail*` entity and drag it. Runs on
-Vision
-(`DetectHumanHandPoseRequest`), read from the same `capturedImage` ARKit is already tracking
-cards against, sampled at 15 Hz — independent of and slower than the 60 fps render loop, and
-guarded against overlapping inference. Grab is gated on `phase == .playing` and is then
+Vision (`DetectHumanHandPoseRequest`), read from the same `capturedImage` ARKit is already
+tracking cards against, sampled at 15 Hz — independent of and slower than the 60 fps render loop,
+and guarded against overlapping inference. Grab is gated on `phase == .playing` and is then
 nearest-snail-by-screen-projection within `pinchPickRadius`, not a hit test; a held snail tracks
-the pinch point at fixed camera depth; release fades it out and hides it. Full mechanism, including the open/close debounce and the Vision
-coordinate-space gotcha, in `docs/interaction.md`.
+the pinch point at fixed camera depth; release near its home slot snaps it back and un-scores it,
+otherwise it fades and hides for good. Full mechanism, including the open/close debounce and the
+Vision coordinate-space gotcha, in `docs/interaction.md`.
 
 ## Model scale
 

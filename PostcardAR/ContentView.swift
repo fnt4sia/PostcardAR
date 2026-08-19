@@ -47,14 +47,6 @@ private struct ScannerScreen: View {
                         .padding()
                 }
             }
-            .overlay(alignment: .topLeading) {
-                // Only while there is something to grab — the crosshair means "this is where the
-                // pinch lands", which is a lie on every other screen.
-                if game.phase == .playing, let point = status.pinchPoint {
-                    PinchCrosshair(progress: status.pinchProgress)
-                        .position(point)
-                }
-            }
             .overlay { runOverlay }
     }
 
