@@ -1,7 +1,9 @@
 # Pinch pickup
 
 The one gesture in the app: pinch to grab a `SeaSnail*` entity in a loaded model, drag it, let
-go. Everything here lives in the "Pinch pickup" section of `PostcardARView.swift`'s `Coordinator`.
+go. Everything here lives in `PinchInteraction.swift` — one `PinchInteraction` type that
+`PostcardARView.swift`'s `Coordinator` owns and drives; see that file's header for the exact call
+surface between the two.
 
 ## Why Vision, not ARKit
 
@@ -9,14 +11,14 @@ ARKit tracks cards, not hands. Picking anything up needs a second, independent r
 camera feed: Apple's Vision framework, specifically `DetectHumanHandPoseRequest`, which returns
 joint positions (thumb tip, index tip, wrist, and so on) for a hand in an image.
 
-The two run side by side, not one feeding the other: `updatePinchDetection()` reads
+The two run side by side, not one feeding the other: `sample()` reads
 `session.currentFrame.capturedImage` — the same buffer ARKit is already tracking cards against —
 and hands it to Vision separately.
 
 ## Decoupled from the render loop
 
 The render loop runs at ~60 fps; hand-pose inference does not need to, and running it there would
-add real cost every frame for no benefit. `updatePinchDetection()` is still called from
+add real cost every frame for no benefit. `sample()` is still called from
 `onRenderFrame()`, but self-throttles to `handPoseSampleInterval` (15 Hz) and guards against
 overlapping inference with `handPoseTaskInFlight` — a slow sample is skipped over, not queued.
 
@@ -26,13 +28,13 @@ frame:)` — ARKit throttles the camera once too many frames are held alive at o
 
 Inference itself runs off the main actor (`perform(on:orientation:)` is not `@MainActor`); the
 surrounding `Task { @MainActor in ... }` is there so every mutation after the `await` — moving
-the crosshair, calling `attemptGrab` — lands back on the same thread the rest of the coordinator
+the crosshair, calling `attemptGrab` — lands back on the same thread the rest of `PinchInteraction`
 runs on, with no explicit hop.
 
 ## Reading the pinch
 
 Four joints, gated in two separate places, not one shared list: thumb tip and index tip gate the
-point, needing only *one* of them confident (`updatePinchDetection()`'s first real `guard`, past
+point, needing only *one* of them confident (`sample()`'s first real `guard`, past
 the no-hand check — mid-pinch the thumb sits on top of the index fingertip, so requiring both
 froze the point every time that tip dropped out); wrist and index knuckle (`.indexMCP`)
 additionally gate `ratio`, needing both tips *and* both of themselves, in a second `guard` placed
@@ -51,7 +53,7 @@ all, and only "no hand" erases state: `hand == nil` clears `pinchPoint`, resets
 `pinchPointFilter`, and starts `handPoseLossTimeout`'s clock toward a forced release. A hand
 Vision saw but couldn't read well just holds the last `pinchPoint` and leaves the filter alone —
 clearing the point on every confidence dip was the other half of the "stuck in the air" bug,
-since `updateHeldSnail()` needs it to move the snail and only `releaseHeld()` clears `held`.
+since `updateDrag()` needs it to move the snail and only `releaseHeld()` clears `held`.
 
 **The ratio.** Thumb-to-index distance alone isn't usable — it shrinks as the hand moves away
 from the camera even with fingers held apart the same amount. Dividing by wrist-to-knuckle
@@ -111,7 +113,7 @@ Getting an upright-image pixel point is only half the job: turning *that* into a
 hand-rolled aspect-fill math, not `ARFrame.displayTransform(for:viewportSize:)` — that API's
 result never lined up with where `ARView` actually draws its camera background. `screenPoint(for:)`
 instead reproduces `ARView`'s aspect-fill rendering directly: scale the upright image
-(`Coordinator.uprightImageSize(of:orientation:)`) up until it covers the viewport, crop the
+(`PinchInteraction.uprightImageSize(of:orientation:)`) up until it covers the viewport, crop the
 overflow evenly off both sides, place the point in that scaled/cropped rect. This mirrors the
 math a working reference implementation (`posehandtest/PointerMapping.swift`) uses for its own
 on-screen hand cursor.
@@ -128,14 +130,14 @@ subview of `arView` itself, moved every sample by `updateCrosshair(at:progress:)
 
 `updateCrosshair` also hides it whenever `game.phase != .playing`, on top of hiding for a `nil`
 point — it means "this is where the pinch lands", which is a lie on every other screen, including
-this run's own instructions/countdown/grace/result phases. `updatePinchDetection()` itself keeps
+this run's own instructions/countdown/grace/result phases. `sample()` itself keeps
 sampling regardless of phase, because the occlusion lock's hand-presence detection (below) needs
 to keep running outside `.playing` too; only the crosshair and the grab/release logic are gated.
 
-**Filtering: One Euro, not a fixed EMA.** `updatePinchDetection()` runs the raw point through
+**Filtering: One Euro, not a fixed EMA.** `sample()` runs the raw point through
 `pinchPointFilter` (a `PinchPointFilter`, two `OneEuroFilter`s — one per axis, see their doc
 comments for why per-axis) once, at sample time, and writes the result straight to `pinchPoint`,
-read directly by `updateHeldSnail()` and the crosshair.
+read directly by `updateDrag()` and the crosshair.
 
 A fixed-factor EMA (`previous + (raw - previous) * factor`) is a jitter-vs-lag dial with no way to
 be good at both: a factor steady enough to kill tremor at rest also damps a fast-moving hand by
@@ -152,7 +154,7 @@ derivative laggier, not calmer, so it stays at the reference default and `pinchM
 real rest-state knob (see "Tuning" below).
 
 It's also *dt*-aware, using a real timestamp (`frame.timestamp` from ARKit's own clock, captured
-before the `Task` in `updatePinchDetection()`, not `Date()`): `OneEuroFilter.filter(_:timestamp:)`
+before the `Task` in `sample()`, not `Date()`): `OneEuroFilter.filter(_:timestamp:)`
 computes `dt` from consecutive timestamps and folds it into `alpha` directly, so a skipped sample
 (occlusion, `handPoseTaskInFlight` overlap) doesn't quietly grow the filter's effective lag.
 
@@ -173,7 +175,7 @@ shapes on every snail and would return whatever entity is topmost in the hierarc
 whichever one is visually closest to the pinch. The chosen snail's distance from the camera is
 recorded once, in `held`, and held fixed for the drag.
 
-**Drag** (`updateHeldSnail()`) runs every rendered frame — same idiom as `hold(_:)` for cards —
+**Drag** (`updateDrag()`) runs every rendered frame — same idiom as `hold(_:)` for cards —
 and re-projects `pinchPoint` into a world-space ray via `arView.ray(through:)`, placing the
 snail at the fixed grab depth along that ray. Fixed depth means the snail tracks the screen
 point at constant distance, rather than sliding toward or away from the camera.
@@ -182,13 +184,13 @@ point at constant distance, rather than sliding toward or away from the camera.
 snail's `home` slot (`pinchSnapRadius`) and the run still `.playing`. If so it glides home via
 `Entity.move(to:relativeTo:duration:)`, reverses the score, and clears `removed` — see "Scoring,
 and putting the snails back" in [simulation.md](simulation.md) for the full undo path. Otherwise
-it moves the entity into `fading` rather than deleting it immediately: `updateFadingSnails()` steps
+it moves the entity into `fading` rather than deleting it immediately: `updateFading()` steps
 its opacity down by `pinchFadeStep` each frame and **hides** it at zero — a plain per-frame loop
 rather than `AnimationResource`, since the render loop is already iterating every frame regardless.
 
 Hidden, not `removeFromParent()`: Play Again needs the same snails back on the same coral, and
 keeping them in the tree makes that a transform reset rather than a second load of a model already
-in memory. Each one carries the local transform it loaded with, and `restoreSnails()` puts it back
+in memory. Each one carries the local transform it loaded with, and `restoreAll()` puts it back
 — see "Scoring, and putting the snails back" in [simulation.md](simulation.md).
 
 **Forced release.** If a pinch is closed and Vision stops confidently seeing a hand for
@@ -236,23 +238,25 @@ a snail hides it instead of being painted over — see "People occlusion" in the
 ## Finding the snails
 
 ```swift
-private func collectSnails(in entity: Entity) -> [Entity] {
+private func findSnails(in entity: Entity) -> [Entity] {
     var found = entity.name.hasPrefix("SeaSnail") ? [entity] : []
     for child in entity.children {
-        found.append(contentsOf: collectSnails(in: child))
+        found.append(contentsOf: findSnails(in: child))
     }
     return found
 }
 ```
 
-Walked once per **simulation** model, right after `fit(_:toCardWidth:named:)` in `loadModels()`,
-and flattened into one `snails` array shared across every simulation card — pickup works on
-whichever snail is nearest the pinch, regardless of which card's model it came from. Anything not
-named `SeaSnail*` (the coral, say) is inert scenery and never enters the array.
+`PinchInteraction.collectSnails(from:)` wraps this and is called once per **simulation** model,
+right after `fit(_:toCardWidth:named:)` in `PostcardARView.swift`'s `loadModels()` — the coordinator
+crossing into `PinchInteraction` is the one place model loading and pinch pickup actually touch.
+Flattened into one `snails` array shared across every simulation card — pickup works on whichever
+snail is nearest the pinch, regardless of which card's model it came from. Anything not named
+`SeaSnail*` (the coral, say) is inert scenery and never enters the array.
 
-A showcase card's model is never walked at all, which is the whole implementation of "no pinch on
-a showcase card": `attemptGrab(at:)` has nothing to find on one, with no extra test. See
-[simulation.md](simulation.md).
+A showcase card's model is never handed to `collectSnails(from:)` at all, which is the whole
+implementation of "no pinch on a showcase card": `attemptGrab(at:)` has nothing to find on one,
+with no extra test. See [simulation.md](simulation.md).
 
 ## Haptics
 
@@ -268,10 +272,11 @@ collected" reads as its own kind of event rather than one more shade of grab/rel
 
 ## Tuning
 
-All the constants above sit at the top of `PostcardARView.swift`, alongside the pose-smoothing
-ones. `pinchCloseRatio` / `pinchOpenRatio` are the ones actually worth tuning per hand — read
+All the constants above sit at the top of `PinchInteraction.swift`. The card pose-smoothing
+constants are a separate set, at the top of `PostcardARView.swift` — see
+[smoothing.md](smoothing.md). `pinchCloseRatio` / `pinchOpenRatio` are the ones actually worth tuning per hand — read
 them live off the on-screen crosshair ring (`pinchProgress` already reflects them), or by
-temporarily printing `ratio` in `updatePinchDetection()`.
+temporarily printing `ratio` in `sample()`.
 
 `pinchOpenConfirmSamples` trades false-release immunity for release latency — raise it if a
 still-pinched snail still fades occasionally, lower it if release starts to feel delayed.

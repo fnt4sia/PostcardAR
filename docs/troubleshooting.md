@@ -208,12 +208,11 @@ leaves the model on camera and pinching through them would score.
 
 ### Play Again starts a run with no snails left
 
-`restoreSnails()` did not run. A released snail is *hidden*, not removed from the entity tree,
-precisely so a second run can put it back — if `updateFadingSnails()` was changed back to
-`removeFromParent()`, or the phase-transition test in `updateGame(cardPresent:candidate:)` was
-loosened, this is what comes back. Note both halves of that test look at where the phase came
-*from*: resuming out of `grace` also lands in `countdown`, and that run's snails must **not** be
-restored.
+`restoreAll()` did not run. A released snail is *hidden*, not removed from the entity tree,
+precisely so a second run can put it back — if `updateFading()` was changed back to
+`removeFromParent()`, or the phase-transition test in `PinchInteraction.update()` was loosened,
+this is what comes back. Note both halves of that test look at where the phase came *from*:
+resuming out of `grace` also lands in `countdown`, and that run's snails must **not** be restored.
 
 ### It does not run on the simulator
 

@@ -48,7 +48,8 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 | Path | Purpose |
 |---|---|
 | `PostcardAR/ContentView.swift` | Start button, the camera screen's status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
-| `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, pinch pickup, and card kinds |
+| `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
+| `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — grabbable snails, drag/release, hand-pose sampling, the crosshair, haptics |
 | `PostcardAR/GameSession.swift` | The minigame's state machine and clocks — phases, score, the 30 s run, the 5 s grace |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |

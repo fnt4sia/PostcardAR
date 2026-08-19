@@ -15,9 +15,9 @@ kind: name.hasPrefix(simulationCardPrefix) ? .simulation : .showcase
 
 The type travels in the name for the same reason the model does: adding a card stays two files
 and no code change, and nothing in the source names an individual card. It is the same idiom as
-the `SeaSnail` prefix that `collectSnails(in:)` matches on. `Showcase` as a prefix is a convention
-for readability only — the code tests for `Simulation` and treats everything else as showcase, so
-an unprefixed card is a showcase card.
+the `SeaSnail` prefix that `PinchInteraction.collectSnails(from:)` matches on. `Showcase` as a
+prefix is a convention for readability only — the code tests for `Simulation` and treats
+everything else as showcase, so an unprefixed card is a showcase card.
 
 Renaming a card to change its kind means renaming its `.usdz` too; the pairing is still by exact
 name. See [reference-images.md](reference-images.md) and [models.md](models.md).
@@ -148,19 +148,22 @@ private struct Snail {
 }
 ```
 
-`updateFadingSnails()` ends a fade with `isEnabled = false` instead of `removeFromParent()`, and
-`restoreSnails()` walks the array putting each entity back to `home`, clearing its
+`updateFading()` ends a fade with `isEnabled = false` instead of `removeFromParent()`, and
+`restoreAll()` walks the array putting each entity back to `home`, clearing its
 `OpacityComponent`, re-enabling it and clearing `removed`. `home` is a *local* transform, so
 restoring it re-seats the snail on the coral wherever the coral currently is — dragging writes
 world-space positions into that same local transform, which is exactly what this undoes.
 
-Restoring is triggered from the render loop by watching for a phase change, not from the buttons,
-because the buttons live in SwiftUI and the entities live in the coordinator:
+Restoring is triggered by watching for a phase change, not from the buttons, because the buttons
+live in SwiftUI and the entities live in `PinchInteraction`. Watched there rather than in the
+coordinator — `PinchInteraction.update()` compares `game.phase` against its own `lastPhase` every
+call, since restoring snails is pinch-side bookkeeping the coordinator has no other reason to know
+about:
 
 ```swift
-if (game.phase == .instructions && lastGamePhase != .instructions)
-    || (game.phase == .countdown && lastGamePhase == .finished) {
-    restoreSnails()
+if (game.phase == .instructions && lastPhase != .instructions)
+    || (game.phase == .countdown && lastPhase == .finished) {
+    restoreAll()
 }
 ```
 

@@ -148,11 +148,14 @@ up there and whichever card you point at near that spot appears to have spawned 
 is therefore driven by hand, once per rendered frame, from two facts:
 
 ```swift
-let handInFrame = held != nil
-    || Date().timeIntervalSince(lastHandSeenTime) < handPresenceTimeout
+let handInFrame = pinch.handInFrame
 let isSimulation = cards[index].kind == .simulation
 let visible = tracked || (cards[index].pivot.isEnabled && handInFrame && isSimulation)
 ```
+
+`pinch.handInFrame` (`held != nil || Date().timeIntervalSince(lastHandSeenTime) <
+handPresenceTimeout`) lives in `PinchInteraction` — see [interaction.md](interaction.md) — and is
+the one piece of pinch state the coordinator reads back.
 
 Read it as three rules, for a **simulation** card:
 
