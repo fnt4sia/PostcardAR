@@ -191,5 +191,5 @@ The status panel is hidden during `countdown`, `playing` and `finished`, where i
 of the HUD. It is kept up for `grace` on purpose: *Hand in frame* with nothing locked is exactly
 the reading needed when a model failed to hold, and the grace screen is the moment it failed.
 
-The pinch crosshair is drawn only during `playing`. It means "this is where the pinch lands",
-which is a lie on every other screen.
+Pinch pickup is only live during `playing` — `attemptGrab(at:)` is gated on `phase == .playing`,
+so pinching through any other screen does nothing.

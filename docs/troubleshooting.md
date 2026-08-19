@@ -10,7 +10,7 @@ The camera screen has a panel in the top corner:
 |---|---|
 | **Looking for a card…** / **Detected: `name`, `name`** | Which reference images ARKit is tracking *right now*, from `Entity.isAnchored`. A model can outlive its entry: a card lost while a hand is in frame stays locked on screen — see "Tracking loss, and the occlusion lock" in [tracking.md](tracking.md). |
 | **Locked: `name`** (yellow) | That card's model is on screen while ARKit is *not* tracking its card — the occlusion lock is holding it. Absent when nothing is locked. |
-| **Hand in frame** / **No hand** | Whether Vision currently sees a hand at all, which is what the lock runs on. Looser than the pinch crosshair: a hand can be present here and too poorly resolved to pinch with. |
+| **Hand in frame** / **No hand** | Whether Vision currently sees a hand at all, which is what the lock runs on. Looser than pinching: a hand can be present here and too poorly resolved for `evaluatePinch(ratio:at:)` to read a pinch off it. |
 | **Loading models (n/total)…** / **Models loaded (n)** | How many `.usdz` files have finished loading, one per reference image. |
 | Red text | An `ARSession` error, or a model that failed to load — named, one line each. |
 

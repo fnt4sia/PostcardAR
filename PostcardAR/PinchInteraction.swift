@@ -15,7 +15,6 @@
 import ARKit
 import CoreVideo
 import RealityKit
-import SwiftUI
 import UIKit
 import Vision
 
@@ -23,7 +22,7 @@ import Vision
 
 /// Hand-pose sampling rate, deliberately slower than the render loop — see `PinchInteraction.sample()`.
 /// Vision inference competes with ARKit and RealityKit for the same GPU/ANE time; 30 Hz made the
-/// crosshair steadier but the card jittery, not a trade worth making.
+/// pinch point steadier but the card jittery, not a trade worth making.
 private let handPoseSampleInterval: TimeInterval = 1.0 / 15.0
 
 /// One Euro filter tuning for the displayed pinch point — see `OneEuroFilter` and
@@ -176,34 +175,10 @@ struct PinchPointFilter {
     }
 }
 
-/// Where the pinch is landing, and how closed it currently is. Not used from SwiftUI directly —
-/// `PinchInteraction` hosts it as a plain subview of `arView` via `UIHostingController` (see
-/// `setUpCrosshair(in:)`), so it shares `arView`'s own coordinate space instead of going through
-/// a separate SwiftUI overlay that could disagree with it on where things land.
-struct PinchCrosshair: View {
-    let progress: Float
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(.white.opacity(0.4), lineWidth: 2)
-            Circle()
-                .trim(from: 0, to: CGFloat(progress))
-                .stroke(Color.green, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .rotationEffect(.degrees(-90)) // start the ring at 12 o'clock, fill clockwise
-            Circle()
-                .fill(.white)
-                .frame(width: 6, height: 6)
-        }
-        .frame(width: 44, height: 44)
-        .animation(.easeOut(duration: 0.1), value: progress)
-    }
-}
-
 // MARK: - PinchInteraction
 
 /// Owns everything pinch pickup touches: the grabbable snails, the drag/release state, hand-pose
-/// sampling, the crosshair, and the haptics. `PostcardARView.Coordinator` holds one and drives it
+/// sampling, and the haptics. `PostcardARView.Coordinator` holds one and drives it
 /// per frame; see the file header for the full call surface.
 final class PinchInteraction {
     /// One grabbable drupella snail.
@@ -219,8 +194,8 @@ final class PinchInteraction {
         var removed = false
     }
 
-    /// The run. Read for phase gating (grab, crosshair visibility, snap-back) and written to for
-    /// scoring — `scored()` on grab, `unscored()` on a snap-back release.
+    /// The run. Read for phase gating (grab, snap-back) and written to for scoring —
+    /// `scored()` on grab, `unscored()` on a snap-back release.
     private let game: GameSession
 
     /// `game.phase` as of the previous call to `update()`. A fresh run needs its picked-off
@@ -268,8 +243,8 @@ final class PinchInteraction {
     /// a hand was seen. The third guard (wrist/knuckle) doesn't use this — see its comment.
     private var lastPinchEvaluationTime = Date.distantPast
 
-    /// Displayed pinch point — crosshair and drag both read this, set from each raw sample
-    /// after `pinchPointFilter` damps it. No render-loop glide stage: gliding toward a target
+    /// Latest pinch point — `updateDrag()` reads this, set from each raw sample after
+    /// `pinchPointFilter` damps it. No render-loop glide stage: gliding toward a target
     /// that itself only moves at `handPoseSampleInterval` (15 Hz) reads as steady-state lag.
     private var pinchPoint: CGPoint?
 
@@ -283,10 +258,6 @@ final class PinchInteraction {
     /// the hand is lost, so re-acquiring doesn't glide in from a stale position/derivative.
     private var pinchPointFilter = PinchPointFilter()
 
-    /// Ring fill from the last sample that actually computed a `ratio` — kept so a
-    /// wrist/knuckle confidence dip can move the crosshair without resetting its ring.
-    private var pinchProgress: Float = 0
-
     /// `.soft` — firm grab, gentle let-go. `prepare()`d early to hide Taptic spin-up latency.
     private var pinchHaptics: UIImpactFeedbackGenerator?
 
@@ -294,11 +265,6 @@ final class PinchInteraction {
     /// intensity, so "put back, not collected" reads as its own kind of event rather than a
     /// third shade of grab/release.
     private var snapHaptics: UINotificationFeedbackGenerator?
-
-    /// `PinchCrosshair` hosted as a plain subview of `arView`, not a SwiftUI overlay — shares
-    /// `arView.bounds`' coordinate space by construction, the same space `pinchPoint` and
-    /// `arView.ray(through:)` use.
-    private var crosshairHost: UIHostingController<PinchCrosshair>?
 
     init(game: GameSession) {
         self.game = game
@@ -311,13 +277,11 @@ final class PinchInteraction {
         held != nil || Date().timeIntervalSince(lastHandSeenTime) < handPresenceTimeout
     }
 
-    /// Wires up haptics and the crosshair against a live `ARView`. Call once, from
-    /// `Coordinator.start(in:)`.
+    /// Wires up haptics against a live `ARView`. Call once, from `Coordinator.start(in:)`.
     func attach(to arView: ARView) {
         self.arView = arView
         pinchHaptics = UIImpactFeedbackGenerator(style: .soft, view: arView)
         snapHaptics = UINotificationFeedbackGenerator(view: arView)
-        setUpCrosshair(in: arView)
     }
 
     /// Finds every entity named `Drupella*` in a loaded model and adds them to the grabbable
@@ -394,35 +358,6 @@ final class PinchInteraction {
         }
     }
 
-    // MARK: Crosshair
-
-    /// Adds `PinchCrosshair` as a plain subview of `arView`, not a SwiftUI overlay — see
-    /// `crosshairHost`. Sized once; `updateCrosshair(at:progress:)` only ever moves/hides it.
-    private func setUpCrosshair(in arView: ARView) {
-        let host = UIHostingController(rootView: PinchCrosshair(progress: 0))
-        host.view.backgroundColor = .clear
-        host.view.isUserInteractionEnabled = false
-        host.view.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
-        host.view.isHidden = true
-        arView.addSubview(host.view)
-        crosshairHost = host
-    }
-
-    /// Moves the crosshair to `point` (in `arView`'s own coordinate space — same as
-    /// `pinchPoint`) and updates its ring fill. `nil`, or the run not being `.playing`,
-    /// hides it — it means "this is where the pinch lands", which is a lie on every other
-    /// screen (including a live run's own instructions/countdown/grace/result phases).
-    private func updateCrosshair(at point: CGPoint?, progress: Float) {
-        guard let host = crosshairHost else { return }
-        guard let point, game.phase == .playing else {
-            host.view.isHidden = true
-            return
-        }
-        host.view.isHidden = false
-        host.view.center = point
-        host.rootView = PinchCrosshair(progress: progress)
-    }
-
     // MARK: Detection
 
     /// Size of `capturedImage` after being rotated upright by `imageOrientation` — what the
@@ -489,7 +424,6 @@ final class PinchInteraction {
                 pinchPoint = nil
                 pinchPointFilter = PinchPointFilter() // don't glide in from a stale position
                 pinchOpenStreak = 0
-                updateCrosshair(at: nil, progress: 0)
                 if pinchClosed, Date().timeIntervalSince(lastPinchEvaluationTime) >= handPoseLossTimeout {
                     pinchClosed = false
                     releaseHeld()
@@ -549,11 +483,7 @@ final class PinchInteraction {
             }
 
             let filtered = pinchPointFilter.filter(raw, timestamp: timestamp)
-
-            // Point placed — move the crosshair unconditionally before checking whether
-            // there's enough to also evaluate a grab/release this sample.
             pinchPoint = filtered
-            updateCrosshair(at: filtered, progress: pinchProgress)
 
             // `ratio` trusts the *raw* joints, not confidence-filtered `thumb`/`index` —
             // `anchorTip` already guarantees one tip is genuinely confident this sample,
@@ -577,13 +507,11 @@ final class PinchInteraction {
         }
     }
 
-    /// Debounces one hand-pose sample into a grab or release, and updates the ring fill.
+    /// Debounces one hand-pose sample into a grab or release.
     /// The point itself (`pinchPoint`) is already set by the caller — see `sample()` — since
     /// placing it doesn't depend on anything evaluated here.
     private func evaluatePinch(ratio: Float, at point: CGPoint) {
         lastPinchEvaluationTime = Date() // this sample is what the forced-release bail-outs were waiting for
-        pinchProgress = min(max((pinchOpenRatio - ratio) / (pinchOpenRatio - pinchCloseRatio), 0), 1)
-        updateCrosshair(at: point, progress: pinchProgress)
 
         if !pinchClosed, ratio < pinchOpenRatio {
             pinchHaptics?.prepare() // warm the Taptic Engine before the grab is confirmed

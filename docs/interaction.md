@@ -27,8 +27,8 @@ reproduce the exact retention problem `docs/tracking.md` describes for `session(
 frame:)` — ARKit throttles the camera once too many frames are held alive at once.
 
 Inference itself runs off the main actor (`perform(on:orientation:)` is not `@MainActor`); the
-surrounding `Task { @MainActor in ... }` is there so every mutation after the `await` — moving
-the crosshair, calling `attemptGrab` — lands back on the same thread the rest of `PinchInteraction`
+surrounding `Task { @MainActor in ... }` is there so every mutation after the `await` — setting
+`pinchPoint`, calling `attemptGrab` — lands back on the same thread the rest of `PinchInteraction`
 runs on, with no explicit hop.
 
 ## Reading the pinch
@@ -122,22 +122,15 @@ It's the true midpoint of `thumbTip` and `indexTip` when both are confident — 
 index," plainly, no weighting — and the one confident tip's own position when only one is (see
 "Reading the pinch" above).
 
-**The crosshair.** `setUpCrosshair(in:)` hosts `PinchCrosshair` as a plain `UIHostingController`
-subview of `arView` itself, moved every sample by `updateCrosshair(at:progress:)` setting
-`host.view.center` directly — not a SwiftUI overlay positioned with `.position(point)` above
-`PostcardARView`. A subview of `arView` shares its coordinate space with `arView.ray(through:)`
-(the drag) by construction, instead of by two frameworks' layout systems happening to agree.
-
-`updateCrosshair` also hides it whenever `game.phase != .playing`, on top of hiding for a `nil`
-point — it means "this is where the pinch lands", which is a lie on every other screen, including
-this run's own instructions/countdown/grace/result phases. `sample()` itself keeps
-sampling regardless of phase, because the occlusion lock's hand-presence detection (below) needs
-to keep running outside `.playing` too; only the crosshair and the grab/release logic are gated.
+Nothing draws the pinch point on screen — there is no crosshair. `sample()` keeps sampling
+regardless of `game.phase`, because the occlusion lock's hand-presence detection (below) needs to
+keep running outside `.playing` too; only the grab/release logic (`attemptGrab(at:)`, gated on
+`phase == .playing`) is phase-gated.
 
 **Filtering: One Euro, not a fixed EMA.** `sample()` runs the raw point through
 `pinchPointFilter` (a `PinchPointFilter`, two `OneEuroFilter`s — one per axis, see their doc
 comments for why per-axis) once, at sample time, and writes the result straight to `pinchPoint`,
-read directly by `updateDrag()` and the crosshair.
+read directly by `updateDrag()`.
 
 A fixed-factor EMA (`previous + (raw - previous) * factor`) is a jitter-vs-lag dial with no way to
 be good at both: a factor steady enough to kill tremor at rest also damps a fast-moving hand by
@@ -159,11 +152,10 @@ computes `dt` from consecutive timestamps and folds it into `alpha` directly, so
 (occlusion, `handPoseTaskInFlight` overlap) doesn't quietly grow the filter's effective lag.
 
 Filtering happens once per sample, not once per rendered frame — a render-loop glide toward each
-new sample would mean the displayed point never catches up before the next sample moves the
-target again, since the target itself only moves at `handPoseSampleInterval` (15 Hz). Sample-time
-filtering has no such catch-up debt: the displayed point is always exactly one filtered sample
-old. `attemptGrab`/`updateHeldSnail` read the same filtered `pinchPoint` as the crosshair — no
-separate raw-vs-displayed split.
+new sample would mean the tracked point never catches up before the next sample moves the target
+again, since the target itself only moves at `handPoseSampleInterval` (15 Hz). Sample-time
+filtering has no such catch-up debt: `pinchPoint` is always exactly one filtered sample old.
+`attemptGrab`/`updateDrag` both read that same filtered value — no separate raw-vs-used split.
 
 ## Grab, drag, release
 
@@ -284,9 +276,8 @@ collected" reads as its own kind of event rather than one more shade of grab/rel
 
 All the constants above sit at the top of `PinchInteraction.swift`. The card pose-smoothing
 constants are a separate set, at the top of `PostcardARView.swift` — see
-[smoothing.md](smoothing.md). `pinchCloseRatio` / `pinchOpenRatio` are the ones actually worth tuning per hand — read
-them live off the on-screen crosshair ring (`pinchProgress` already reflects them), or by
-temporarily printing `ratio` in `sample()`.
+[smoothing.md](smoothing.md). `pinchCloseRatio` / `pinchOpenRatio` are the ones actually worth
+tuning per hand — read them by temporarily printing `ratio` in `sample()`.
 
 `pinchOpenConfirmSamples` trades false-release immunity for release latency — raise it if a
 still-pinched snail still fades occasionally, lower it if release starts to feel delayed.

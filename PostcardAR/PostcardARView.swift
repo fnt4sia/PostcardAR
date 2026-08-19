@@ -194,8 +194,8 @@ extension PostcardARView {
         private var frameSubscription: (any Cancellable)?
 
         /// Everything pinch pickup touches — grabbable snails, drag/release, hand-pose sampling,
-        /// the crosshair, haptics. See `PinchInteraction.swift`'s file header for the call
-        /// surface between this coordinator and it.
+        /// haptics. See `PinchInteraction.swift`'s file header for the call surface between this
+        /// coordinator and it.
         private let pinch: PinchInteraction
 
         init(status: ARStatus, game: GameSession) {
