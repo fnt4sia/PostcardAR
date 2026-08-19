@@ -2,7 +2,7 @@
 //  PinchInteraction.swift
 //  PostcardAR
 //
-//  The one gesture: pinch to grab a `SeaSnail*` entity, drag it, let go. Vision reads the same
+//  The one gesture: pinch to grab a `Drupella*` entity, drag it, let go. Vision reads the same
 //  camera frame ARKit is already tracking cards against, independently and at its own pace — see
 //  docs/interaction.md for the full mechanism.
 //
@@ -75,6 +75,14 @@ private let handPoseLossTimeout: TimeInterval = 0.3
 /// `pinchOpenRatio` is as likely to be an occluded joint as a real open, and a false release is
 /// unrecoverable. ~133 ms at `handPoseSampleInterval`, under `handPoseLossTimeout`.
 private let pinchOpenConfirmSamples = 2
+
+/// Prefix marking a grabbable snail entity — see `collectSnails(from:)`.
+private let drupellaPrefix = "Drupella"
+
+/// Suffix marking a snail's separate outline mesh. Shipped as a flat sibling of its snail in the
+/// source asset, not a child; `collectSnails(from:)` matches it to strip it out of the grabbable
+/// pool and re-parent it under its snail instead.
+private let outlineSuffix = "_Outline"
 
 /// Whole-observation confidence for "there is a hand in frame", used by the occlusion lock and
 /// nothing else. Deliberately low, and deliberately not `jointConfidenceMinimum`: reading a pinch
@@ -223,7 +231,7 @@ final class PinchInteraction {
     /// For projecting/raycasting and reading `session.currentFrame`.
     private weak var arView: ARView?
 
-    /// Every `SeaSnail*` entity across every loaded *simulation* model, flattened. Showcase
+    /// Every `Drupella*` entity across every loaded *simulation* model, flattened. Showcase
     /// models are never collected, which is the whole of "no pinch on a showcase card".
     private var snails: [Snail] = []
 
@@ -312,17 +320,34 @@ final class PinchInteraction {
         setUpCrosshair(in: arView)
     }
 
-    /// Finds every entity named `SeaSnail*` in a loaded model and adds them to the grabbable
+    /// Finds every entity named `Drupella*` in a loaded model and adds them to the grabbable
     /// pool. Call once per loaded *simulation* model — a showcase model's snails should never be
     /// collected, which is the whole implementation of "no pinch on a showcase card".
     func collectSnails(from model: Entity) {
-        snails.append(contentsOf: findSnails(in: model).map { Snail(entity: $0, home: $0.transform) })
+        let (outlines, grabbable) = findDrupella(in: model).reduce(into: ([Entity](), [Entity]())) { result, entity in
+            if entity.name.hasSuffix(outlineSuffix) {
+                result.0.append(entity)
+            } else {
+                result.1.append(entity)
+            }
+        }
+
+        // The source asset ships each snail's outline as a flat sibling, not a child — without
+        // this it stays put on the coral while the real one gets dragged off. Re-parenting
+        // (preserving its current world position, so it doesn't jump) makes it follow the drag.
+        for outline in outlines {
+            let snailName = String(outline.name.dropLast(outlineSuffix.count))
+            guard let snail = grabbable.first(where: { $0.name == snailName }) else { continue }
+            outline.setParent(snail, preservingWorldTransform: true)
+        }
+
+        snails.append(contentsOf: grabbable.map { Snail(entity: $0, home: $0.transform) })
     }
 
-    private func findSnails(in entity: Entity) -> [Entity] {
-        var found = entity.name.hasPrefix("SeaSnail") ? [entity] : []
+    private func findDrupella(in entity: Entity) -> [Entity] {
+        var found = entity.name.hasPrefix(drupellaPrefix) ? [entity] : []
         for child in entity.children {
-            found.append(contentsOf: findSnails(in: child))
+            found.append(contentsOf: findDrupella(in: child))
         }
         return found
     }

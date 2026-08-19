@@ -152,6 +152,6 @@ Not implemented:
 - **Any minigame but the drupella one.** The rules live in `GameSession` and the scoring call in
   `attemptGrab(at:)`; a different game on a different simulation card would need those split per
   card rather than shared.
-- **Pinch gestures on anything but `SeaSnail*` entities** (scaling or spinning the model itself,
+- **Pinch gestures on anything but `Drupella*` entities** (scaling or spinning the model itself,
   say). If added, write to the model entity or a second pivot — never to the anchor, and not to
   the existing pivot, whose world transform is rewritten every frame.

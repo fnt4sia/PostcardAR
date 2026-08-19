@@ -1,6 +1,6 @@
 # Pinch pickup
 
-The one gesture in the app: pinch to grab a `SeaSnail*` entity in a loaded model, drag it, let
+The one gesture in the app: pinch to grab a `Drupella*` entity in a loaded model, drag it, let
 go. Everything here lives in `PinchInteraction.swift` — one `PinchInteraction` type that
 `PostcardARView.swift`'s `Coordinator` owns and drives; see that file's header for the exact call
 surface between the two.
@@ -238,21 +238,31 @@ a snail hides it instead of being painted over — see "People occlusion" in the
 ## Finding the snails
 
 ```swift
-private func findSnails(in entity: Entity) -> [Entity] {
-    var found = entity.name.hasPrefix("SeaSnail") ? [entity] : []
+private func findDrupella(in entity: Entity) -> [Entity] {
+    var found = entity.name.hasPrefix(drupellaPrefix) ? [entity] : []
     for child in entity.children {
-        found.append(contentsOf: findSnails(in: child))
+        found.append(contentsOf: findDrupella(in: child))
     }
     return found
 }
 ```
 
-`PinchInteraction.collectSnails(from:)` wraps this and is called once per **simulation** model,
-right after `fit(_:toCardWidth:named:)` in `PostcardARView.swift`'s `loadModels()` — the coordinator
-crossing into `PinchInteraction` is the one place model loading and pinch pickup actually touch.
-Flattened into one `snails` array shared across every simulation card — pickup works on whichever
-snail is nearest the pinch, regardless of which card's model it came from. Anything not named
-`SeaSnail*` (the coral, say) is inert scenery and never enters the array.
+`collectSnails(from:)` walks the model with this, then splits the result on `outlineSuffix`
+(`"_Outline"`) rather than treating every match as grabbable. The source asset ships each snail's
+outline mesh as a flat *sibling* — `Drupella_01` and `Drupella_01_Outline` both sit directly under
+`root`, not one nested in the other — so left alone an outline would (a) be independently
+grabbable as its own "snail", and (b) stay behind on the coral when the real one is dragged off,
+since nothing connects their transforms. `collectSnails(from:)` re-parents each outline under its
+matching snail (`setParent(_:preservingWorldTransform:)`, so it doesn't jump on re-parenting) and
+only the non-outline matches go into `snails`. Once reparented, an outline moves for free — drag,
+snap-back, `restoreAll()` all write the snail's own transform, and RealityKit composes the child's
+world transform from it same as any other parent/child pair.
+
+Called once per **simulation** model, right after `fit(_:toCardWidth:named:)` in
+`PostcardARView.swift`'s `loadModels()` — the coordinator crossing into `PinchInteraction` is the
+one place model loading and pinch pickup actually touch. Flattened into one `snails` array shared
+across every simulation card — pickup works on whichever snail is nearest the pinch, regardless of
+which card's model it came from.
 
 A showcase card's model is never handed to `collectSnails(from:)` at all, which is the whole
 implementation of "no pinch on a showcase card": `attemptGrab(at:)` has nothing to find on one,

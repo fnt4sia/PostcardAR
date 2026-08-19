@@ -13,7 +13,7 @@ one.
    model follows.
 5. **A card's name prefix decides its kind.** `Simulation*` runs a minigame on it; anything else
    is a *showcase* card that only stands its model up to be looked at. See `docs/simulation.md`.
-6. One gesture exists, on simulation cards only: pinch to pick up a `SeaSnail*` entity inside a
+6. One gesture exists, on simulation cards only: pinch to pick up a `Drupella*` entity inside a
    model and drag it — see `docs/interaction.md`. Nothing else on the model responds to touch.
 
 Adding a card is two files — an image in the resource group and a `.usdz` of the same name —
@@ -248,7 +248,7 @@ bugs. Keep them if the panel is reworked.
 
 A card's name prefix decides what it is: `Simulation*` runs a minigame, anything else is a
 showcase card. Three things and nothing else turn on that — whether the occlusion lock may hold
-the model, whether the model's `SeaSnail*` entities enter the grabbable pool, and whether seeing
+the model, whether the model's `Drupella*` entities enter the grabbable pool, and whether seeing
 the card starts a `GameSession`.
 
 The run is a plain state machine in `GameSession.swift`, driven once per rendered frame from
@@ -270,7 +270,7 @@ in `docs/simulation.md`.
 
 ## Pinch pickup
 
-The one gesture, on simulation cards only: pinch to grab a `SeaSnail*` entity and drag it. Runs on
+The one gesture, on simulation cards only: pinch to grab a `Drupella*` entity and drag it. Runs on
 Vision (`DetectHumanHandPoseRequest`), read from the same `capturedImage` ARKit is already
 tracking cards against, sampled at 15 Hz — independent of and slower than the 60 fps render loop,
 and guarded against overlapping inference. Grab is gated on `phase == .playing` and is then

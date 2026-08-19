@@ -5,7 +5,7 @@ A card is one of two kinds, and the kind is the front of its name:
 | Kind | Prefix | What it does |
 |---|---|---|
 | **Showcase** | anything else | Stands its model up to be looked at. Model appears while the card is tracked and hides when it is not. No lock, no pinch, no UI. |
-| **Simulation** | `Simulation` | A minigame runs on it. The occlusion lock may hold its model on screen under a hand, its `SeaSnail*` entities are grabbable, and detecting it starts a run. |
+| **Simulation** | `Simulation` | A minigame runs on it. The occlusion lock may hold its model on screen under a hand, its `Drupella*` entities are grabbable, and detecting it starts a run. |
 
 ```swift
 private let simulationCardPrefix = "Simulation"
@@ -15,7 +15,7 @@ kind: name.hasPrefix(simulationCardPrefix) ? .simulation : .showcase
 
 The type travels in the name for the same reason the model does: adding a card stays two files
 and no code change, and nothing in the source names an individual card. It is the same idiom as
-the `SeaSnail` prefix that `PinchInteraction.collectSnails(from:)` matches on. `Showcase` as a
+the `Drupella` prefix that `PinchInteraction.collectSnails(from:)` matches on. `Showcase` as a
 prefix is a convention for readability only — the code tests for `Simulation` and treats
 everything else as showcase, so an unprefixed card is a showcase card.
 
@@ -29,7 +29,7 @@ Three things, and nothing else:
 | | Showcase | Simulation |
 |---|---|---|
 | Occlusion lock | never — hides the instant its card is lost | holds the model under a hand, per [tracking.md](tracking.md) |
-| `SeaSnail*` entities collected into the grabbable pool | no | yes |
+| `Drupella*` entities collected into the grabbable pool | no | yes |
 | Seeing the card starts a `GameSession` | no | yes |
 
 The lock is a simulation-only feature because of what it is *for*. It exists so that reaching into

@@ -22,7 +22,7 @@ match — that pairing is the whole mechanism.
 
 The `Simulation` / `Showcase` prefix is part of the name, so it has to appear on both halves. It
 decides whether the card runs a minigame — see [simulation.md](simulation.md). A model on a
-simulation card wants `SeaSnail*` entities in it to be pinched off; on a showcase card those are
+simulation card wants `Drupella*` entities in it to be pinched off; on a showcase card those are
 never collected and the model is scenery.
 
 A card with an image but no matching `.usdz` still tracks; it just shows nothing, and the status

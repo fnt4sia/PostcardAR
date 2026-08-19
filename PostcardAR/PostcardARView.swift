@@ -8,7 +8,7 @@
 //
 //      Showcase     the model appears while the card is tracked and hides when it is not.
 //      Simulation   the occlusion lock may hold the model on screen under a hand, its
-//                   `SeaSnail*` entities are grabbable, and seeing it starts a `GameSession`.
+//                   `Drupella*` entities are grabbable, and seeing it starts a `GameSession`.
 //
 //  Every reference image in the AR resource group is one card:
 //
@@ -42,7 +42,7 @@ private let resourceGroupName = "AR Resources"
 ///
 /// The type travels in the name for the same reason the model does: adding a card stays two
 /// files and no code change, and nothing here names an individual card. Same idiom as the
-/// `SeaSnail` prefix `PinchInteraction.collectSnails(from:)` matches on.
+/// `Drupella` prefix `PinchInteraction.collectSnails(from:)` matches on.
 private let simulationCardPrefix = "Simulation"
 
 /// Model width as a fraction of its card's width — `1.0` is exactly as wide as the card.
@@ -132,7 +132,7 @@ extension PostcardARView {
         /// What a card is for, read off the front of its name — see `simulationCardPrefix`.
         ///
         /// Three things turn on this and nothing else does: whether the occlusion lock may hold
-        /// the model on screen, whether its `SeaSnail*` entities go into the grabbable pool, and
+        /// the model on screen, whether its `Drupella*` entities go into the grabbable pool, and
         /// whether seeing the card starts a run.
         private enum CardKind {
             /// Look at it. The model appears while the card is tracked and hides the moment it
