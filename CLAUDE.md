@@ -282,10 +282,12 @@ Vision coordinate-space gotcha, in `docs/interaction.md`.
 ## Model scale
 
 Anchoring does not scale. A `.usdz` renders at whatever real-world size it was authored at,
-regardless of how big its card is. So each model is measured with `visualBounds` at load time
-and scaled to a fraction of **its own card's** `physicalSize.width` — see
-`fit(_:toCardWidth:named:)` and the `modelWidthRelativeToCard` constant. This keeps the model's
-authored scale irrelevant, and lets cards of different printed sizes each size their own model.
+regardless of how big its card is. So each model is measured with `visualBounds` at load time and
+scaled to a fixed target width in metres, looked up by card name in `modelWidths` (falling back
+to `defaultModelWidth`) — see `fit(_:named:)`. Deliberately not derived from the card's own
+printed width: that field is what ARKit tracks against, and coupling model size to it would mean
+two differently-sized cards could never carry equally-sized models. This keeps the model's
+authored scale irrelevant, and each card's on-screen size is one tunable number.
 
 ## Imported models carry a whole scene
 

@@ -250,7 +250,7 @@ only the non-outline matches go into `snails`. Once reparented, an outline moves
 snap-back, `restoreAll()` all write the snail's own transform, and RealityKit composes the child's
 world transform from it same as any other parent/child pair.
 
-Called once per **simulation** model, right after `fit(_:toCardWidth:named:)` in
+Called once per **simulation** model, right after `fit(_:named:)` in
 `PostcardARView.swift`'s `loadModels()` — the coordinator crossing into `PinchInteraction` is the
 one place model loading and pinch pickup actually touch. Flattened into one `snails` array shared
 across every simulation card — pickup works on whichever snail is nearest the pinch, regardless of

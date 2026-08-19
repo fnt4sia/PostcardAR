@@ -110,9 +110,10 @@ still get painted over, and no setting here changes that. See "People occlusion"
 
 ### The screen fills with texture, or the app looks frozen while the camera still moves
 
-The camera is *inside* the model. A model authored in metres, left unscaled on a card a few
-centimetres wide, does exactly this. Normally `fit(_:toCardWidth:named:)` prevents it; if the
-measurement failed, a red line says so and names the card. Check that card's physical size field.
+The camera is *inside* the model. A model left unscaled — authored at some arbitrary real-world
+size — does exactly this. Normally `fit(_:named:)` prevents it by rescaling to that card's entry
+in `modelWidths`; if the measurement failed (a zero-size `targetWidth`, or a model whose
+`visualBounds` came back empty), a red line says so and names the card.
 
 ### The passthrough camera freezes completely, with no error
 

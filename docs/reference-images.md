@@ -33,15 +33,14 @@ group without either one's model coming out wrong.
 It does **not** affect whether the image is detected. ARKit matches feature points, which is
 scale-invariant — it finds the image whatever number is in that field.
 
-The size does two things:
+The size turns a 2D match into a 3D pose: how far away the card is, and how big the anchor is.
+It does **not** affect the model's size — `fit(_:named:)` scales each model to a fixed target
+width in `modelWidths` (`docs/models.md`), independent of the card's own printed size, precisely
+so the two can't fight each other.
 
-- Turns a 2D match into a 3D pose: how far away the card is, and how big the anchor is.
-- Sets the model's size, because `fit(_:toCardWidth:named:)` scales each model to a fraction of
-  its own card's width.
-
-So a wrong value means the model appears at the wrong scale or floating at the wrong distance.
-It never means "nothing detected". If nothing is detected, the image is the problem, not the
-size.
+So a wrong value means the anchor's distance reads wrong — the model floats at the wrong depth,
+even though its own size is unaffected. It never means "nothing detected". If nothing is
+detected, the image is the problem, not the size.
 
 Measure the printed card once with a ruler and enter it. Approximately right is fine.
 

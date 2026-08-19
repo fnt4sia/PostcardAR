@@ -58,9 +58,9 @@ private let pinchPickRadius: CGFloat = 80
 private let pinchFadeStep: Float = 1.0 / 24.0
 
 /// How close, in metres, a released snail must be to its home slot to snap back — put down,
-/// not collected — instead of fading away scored. Roughly a fifth of a model's authored width
-/// (`modelWidthRelativeToCard` in `PostcardARView.swift`) — close enough that "let go right on
-/// the coral" reads as intentional, far enough that a light release mid-drag doesn't feel sticky.
+/// not collected — instead of fading away scored. Roughly a fifth of the coral model's target
+/// width (`modelWidths` in `PostcardARView.swift`) — close enough that "let go right on the
+/// coral" reads as intentional, far enough that a light release mid-drag doesn't feel sticky.
 private let pinchSnapRadius: Float = 0.04
 
 /// How long the snap-back glide takes, via `Entity.move(to:relativeTo:duration:)`.

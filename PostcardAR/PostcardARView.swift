@@ -45,10 +45,19 @@ private let resourceGroupName = "AR Resources"
 /// `Drupella` prefix `PinchInteraction.collectSnails(from:)` matches on.
 private let simulationCardPrefix = "Simulation"
 
-/// Model width as a fraction of its card's width — `1.0` is exactly as wide as the card.
-/// The only dial for model size, because `fit(_:toCardWidth:named:)` measures the model at load
-/// time and makes its authored scale irrelevant.
-private let modelWidthRelativeToCard: Float = 2.0
+/// Each card's model, sized to a fixed on-screen width in metres — deliberately independent of
+/// the card's own printed width (`ARReferenceImage.physicalSize`, which ARKit tracks against),
+/// so a small card can carry a large model and vice versa without the two fighting. The dial for
+/// model size: `fit(_:named:)` measures the model at load time and makes its authored scale
+/// irrelevant, so only these numbers matter. Keyed by card name; a card missing here falls back
+/// to `defaultModelWidth`.
+private let modelWidths: [String: Float] = [
+    "Showcase_postcard": 0.08,
+    "Simulation_coral_with_drupella": 0.55,
+]
+
+/// Width a card without an entry in `modelWidths` is sized to.
+private let defaultModelWidth: Float = 0.2
 
 /// Pose filtering, applied in `hold(_:)`. Movement smaller than a dead band is treated as
 /// tracking noise and refused outright; anything larger is glided toward by `smoothingFactor`
@@ -150,9 +159,6 @@ extension PostcardARView {
 
             /// Showcase or simulation, decided by `name`'s prefix at build time of the array.
             let kind: CardKind
-
-            /// The card's printed width in metres, straight off the asset catalog entry.
-            let width: Float
 
             /// ARKit's. Its transform is the card's raw pose, re-solved from scratch every frame.
             ///
@@ -275,7 +281,6 @@ extension PostcardARView {
                 cards.append(Card(
                     name: name,
                     kind: name.hasPrefix(simulationCardPrefix) ? .simulation : .showcase,
-                    width: Float(image.physicalSize.width),
                     anchor: anchor,
                     pivot: pivot
                 ))
@@ -478,7 +483,7 @@ extension PostcardARView {
                     do {
                         let model = try await Entity(named: card.name)
                         removeCameras(from: model)
-                        fit(model, toCardWidth: card.width, named: card.name)
+                        fit(model, named: card.name)
                         card.pivot.addChild(model)
                         // Showcase models are looked at, not touched, so their snails never enter
                         // the grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to
@@ -511,29 +516,30 @@ extension PostcardARView {
             }
         }
 
-        /// Scales a model to a fixed fraction of its own card's width and sits it centred on that
+        /// Scales a model to its fixed target width (`modelWidths`) and sits it centred on its
         /// card, base on the surface.
         ///
         /// Anchoring supplies position and rotation, never scale, so without this the model
         /// renders at whatever real-world size it was authored at — a number with no relation to
-        /// the card. Measuring at load time instead means any `.usdz` lands correctly, and every
-        /// card is sized against its own printed width rather than a shared constant.
-        private func fit(_ model: Entity, toCardWidth cardWidth: Float, named name: String) {
+        /// either the card or the on-screen size actually wanted. Measuring at load time instead
+        /// means any `.usdz` lands at exactly its target width regardless of authored scale.
+        private func fit(_ model: Entity, named name: String) {
             let bounds = model.visualBounds(relativeTo: nil)
+            let targetWidth = modelWidths[name] ?? defaultModelWidth
 
             // Worth reporting rather than skipping quietly: a model authored in metres, left
-            // unscaled on a card a few centimetres wide, puts the camera inside the mesh. The
-            // screen fills with texture that barely moves, which reads as a frozen app rather
+            // unscaled at a target width a few centimetres wide, puts the camera inside the mesh.
+            // The screen fills with texture that barely moves, which reads as a frozen app rather
             // than as a sizing bug.
-            guard cardWidth > 0, bounds.extents.x > 0 else {
+            guard targetWidth > 0, bounds.extents.x > 0 else {
                 report("""
-                    Could not size \(name): card is \(cardWidth) m wide, model measures \
+                    Could not size \(name): target width is \(targetWidth) m, model measures \
                     \(bounds.extents.x) m. Showing it at its authored size.
                     """)
                 return
             }
 
-            let scale = cardWidth * modelWidthRelativeToCard / bounds.extents.x
+            let scale = targetWidth / bounds.extents.x
             model.scale = .init(repeating: scale)
 
             // The anchor's axes follow the card: x across its width, z down its height, y out of

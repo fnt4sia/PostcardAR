@@ -41,12 +41,13 @@ exactly why the model appears at an arbitrary size.
 
 ### The fix
 
-Rather than demand every `.usdz` be authored at the correct size, `fit(_:toCardWidth:named:)`
-measures it at load time and derives the scale from its card:
+Rather than demand every `.usdz` be authored at the correct size, `fit(_:named:)` measures it at
+load time and derives the scale from a fixed target width for that card:
 
 ```swift
 let bounds = model.visualBounds(relativeTo: nil)
-let scale = cardWidth * modelWidthRelativeToCard / bounds.extents.x
+let targetWidth = modelWidths[name] ?? defaultModelWidth
+let scale = targetWidth / bounds.extents.x
 model.scale = .init(repeating: scale)
 
 model.position = [
@@ -59,7 +60,7 @@ model.position = [
 `visualBounds` returns a `BoundingBox` with a `center` and `extents` (full width, not half),
 computed over the entity and all its descendants.
 
-The scale line is straightforward: to make width `extents.x` become `cardWidth`, multiply by
+The scale line is straightforward: to make width `extents.x` become `targetWidth`, multiply by
 their ratio.
 
 The position line handles a detail that bites everyone: **the `.usdz` origin is wherever the
@@ -75,33 +76,31 @@ z down its height, and y points out of its surface. A point `p` in the model lan
 - **Standing on the card** — put the box *bottom* at y = 0. The bottom is
   `center.y - extents.y / 2`, so `position.y = scale * (extents.y / 2 - center.y)`.
 
-`cardWidth` is the printed width of the card this particular model belongs to, read from that
-reference image's `physicalSize`. Cards of different printed sizes each size their own model
-correctly.
-
 The payoff is that the model's authored scale stops mattering. Export from Blender at any size;
-it still lands correctly.
+it still lands at exactly `targetWidth`.
 
-### The one dial
+### The one dial, per card
 
 ```swift
-private let modelWidthRelativeToCard: Float = 2.0
+private let modelWidths: [String: Float] = [
+    "Showcase_postcard": 0.15,
+    "Simulation_coral_with_drupella": 0.35,
+]
+private let defaultModelWidth: Float = 0.2
 ```
 
-`1.0` makes the model exactly as wide as its card; the current `2.0` makes it twice as wide.
-`0.5` would make it half as wide. Change that constant, not the model.
+Deliberately **not** derived from the card's printed width (`ARReferenceImage.physicalSize`) —
+that field controls tracking distance/scale for ARKit, and tying model size to it as well meant a
+small card and a large card could never carry equally-sized models, or a physically accurate
+reference image could force an awkwardly large or small model. Each card gets its own metres
+value here instead; add an entry for a new card, or it falls back to `defaultModelWidth`.
 
-It applies to every card, and re-exporting one `.usdz` bigger will *not* make that one model
-relatively larger: `fit` measures the model and normalises its authored scale away, which is the
-whole point of it. A genuinely per-card size would need a per-card value in the code, and nothing
-is asking for that yet.
+Tune per card by eye: raise a card's number if its model reads too small, lower it if too big.
+Nothing else changes — `fit` re-measures and re-derives the scale from whatever `.usdz` is there,
+so the authored size of the model never needs touching.
 
 If a model is very tall or very deep, matching widths may not be the right rule. In that case
-divide by `bounds.extents.y` or `.z` instead of `.x` inside `fit(_:toCardWidth:named:)`.
-
-The trade-off of deriving scale from the card: **the physical size field controls the model's
-size as well as its distance.** An inaccurate measurement is visible — per card, and only for
-that card's model. Measure the printed card properly.
+divide by `bounds.extents.y` or `.z` instead of `.x` inside `fit(_:named:)`.
 
 If the measurement fails, the scale is skipped and a red line appears in the status panel. That
 case is worth reporting rather than passing over quietly: a model authored in metres, left
