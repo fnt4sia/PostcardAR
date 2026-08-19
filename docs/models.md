@@ -10,15 +10,20 @@ after its reference image:
 ```
 PostcardAR/
   Assets.xcassets/AR Resources.arresourcegroup/
-    postcard.arreferenceimage      ← the image ARKit looks for
-    menu.arreferenceimage
-  postcard.usdz                    ← what appears on it
-  menu.usdz
+    Simulation_coral_with_drupella.arreferenceimage   ← the image ARKit looks for
+    Showcase_postcard.arreferenceimage
+  Simulation_coral_with_drupella.usdz                 ← what appears on it
+  Showcase_postcard.usdz
 ```
 
 The target uses a synchronized folder group, so Xcode picks up new files with no further action,
 and nothing has to be registered in code. Renaming a model means renaming its reference image to
 match — that pairing is the whole mechanism.
+
+The `Simulation` / `Showcase` prefix is part of the name, so it has to appear on both halves. It
+decides whether the card runs a minigame — see [simulation.md](simulation.md). A model on a
+simulation card wants `SeaSnail*` entities in it to be pinched off; on a showcase card those are
+never collected and the model is scenery.
 
 A card with an image but no matching `.usdz` still tracks; it just shows nothing, and the status
 panel names the missing file. A `.usdz` with no matching image is never loaded.

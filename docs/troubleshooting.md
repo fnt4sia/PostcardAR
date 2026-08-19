@@ -8,9 +8,15 @@ The camera screen has a panel in the top corner:
 
 | Line | Meaning |
 |---|---|
-| **Looking for a card…** / **Detected: `name`, `name`** | Which reference images ARKit is tracking *right now*, from `Entity.isAnchored`. The model can lag behind this during a brief occlusion — see "Tracking loss" in [tracking.md](tracking.md) — so the label going to "not detected" does not mean the model vanished. |
+| **Looking for a card…** / **Detected: `name`, `name`** | Which reference images ARKit is tracking *right now*, from `Entity.isAnchored`. A model can outlive its entry: a card lost while a hand is in frame stays locked on screen — see "Tracking loss, and the occlusion lock" in [tracking.md](tracking.md). |
+| **Locked: `name`** (yellow) | That card's model is on screen while ARKit is *not* tracking its card — the occlusion lock is holding it. Absent when nothing is locked. |
+| **Hand in frame** / **No hand** | Whether Vision currently sees a hand at all, which is what the lock runs on. Looser than the pinch crosshair: a hand can be present here and too poorly resolved to pinch with. |
 | **Loading models (n/total)…** / **Models loaded (n)** | How many `.usdz` files have finished loading, one per reference image. |
 | Red text | An `ARSession` error, or a model that failed to load — named, one line each. |
+
+The panel is hidden while a run is on screen (`countdown`, `playing`, `finished`), where it would
+overlap the HUD. It is deliberately kept up for the grace screen. If you need it during a run, put
+`finished` and the rest back into `showsStatusPanel` in `ContentView.swift`.
 
 Read them together:
 
@@ -49,6 +55,58 @@ In order of likelihood:
 1. Its `.usdz` is missing or misnamed. A red line names the file it tried to load.
 2. Still loading. Watch the count.
 3. It loaded and was scaled wrong — see the next two entries.
+
+### Another card's model appears on the card I am scanning, or floats in mid-air
+
+Its `pivot` is enabled while its card is untracked, so the model is being drawn at the identity
+transform — the world origin, which is where the phone was when the session started. Every model
+in the group loads at launch, so with the flag missing they all pile up there, and whichever card
+you point at near that spot appears to have spawned them.
+
+Pivots are created with `isEnabled = false`, and only a *tracked* frame is allowed to enable one.
+If that rule was loosened — say the occlusion lock was changed to enable a pivot rather than only
+keep one enabled — this is what comes back. See "Tracking loss, and the occlusion lock" in
+[tracking.md](tracking.md).
+
+### A model stays on screen after the card is gone
+
+Expected, if the panel shows *Hand in frame*: that is the occlusion lock, holding the model frozen
+at its last pose until the hand leaves too. Take the hand out of shot and the model clears within
+`handPresenceTimeout` (1.0 s).
+
+If it holds with no hand anywhere, Vision is seeing one — presence is deliberately permissive
+(`handPresenceConfidence`, 0.1, on the whole observation), so a face, an arm or a hand-shaped
+object can trip it. Raise that constant.
+
+### The model vanishes when I cover the card with my hand — the lock does not fire
+
+Read the panel first; it distinguishes the two causes.
+
+1. **No *Hand in frame*.** Vision is not seeing the hand. Presence is set from
+   `HumanHandPoseObservation.confidence` before any joint test — if even that fails, the hand is
+   probably too close to the lens, badly lit, or edge-on. Lower `handPresenceConfidence`.
+2. ***Hand in frame*, no *Locked:*.** The card's model was not on screen at the moment tracking
+   was lost. The lock can only hold a model that was already showing — by design, since that is
+   what stops unscanned cards appearing. Detect the card first, then cover it.
+3. **Both lines correct, model still not visible.** It is behind your hand: people occlusion is
+   doing its job, and your hand is between the camera and the model. Move the hand beside the card
+   instead of flat over it, keeping the card obscured, and the model reappears in place.
+
+Historically this failed because presence reused the pinch guard's four-joint test
+(`jointConfidenceMinimum` on thumb, index, wrist and knuckle). A palm over a card crops its own
+wrist out of frame, so that test rejects exactly the pose the lock exists for. Presence must stay
+observation-level.
+
+### My hand is drawn behind the model instead of in front of it
+
+People occlusion is off or unsupported. It is one frame semantic,
+`.personSegmentationWithDepth`, set in `start(in:)` behind
+`ARWorldTrackingConfiguration.supportsFrameSemantics(_:)` — and the guard is not optional, an
+unsupported semantic throws. Devices before the A12 cannot do it at all.
+
+Note it mattes *people* only. A hand occludes the coral; the card, the table and everything else
+still get painted over, and no setting here changes that. See "People occlusion" in
+[tracking.md](tracking.md).
 
 ### The screen fills with texture, or the app looks frozen while the camera still moves
 
@@ -115,6 +173,47 @@ See [interaction.md](interaction.md) for the whole mechanism. In order of likeli
    is nearest-by-screen-position, not a hit test, so it can pick a snail behind the one you meant.
 3. Lighting or hand angle — Vision's hand-pose detector needs the hand clearly in frame, same as
    ARKit needs the card clearly in frame.
+
+### A card shows its model but no minigame ever starts
+
+It is a showcase card. Only a reference image whose name starts `Simulation` runs one, and the
+`.usdz` has to carry the same prefix or the model will not load at all. Check the name in the
+asset catalog — see [simulation.md](simulation.md).
+
+### The instructions or the result screen never goes away
+
+Neither needs the card in view, by design: on both of them the player is reading the phone rather
+than aiming it, so losing tracking there does not wipe the run. **Start** and **Play Again** /
+**Close** are the only ways out. Only `countdown` and `playing` are card-dependent.
+
+### The run restarted from zero when I looked away
+
+The card left the frame with no hand in it either, and stayed away longer than the 5 s grace
+period. Inside those 5 s the score and the clock are held and the card coming back resumes exactly
+where it left; past them the run is wiped and the next scan is a fresh one.
+
+To keep a run alive while re-aiming, leave a hand in frame — the occlusion lock then holds the
+model and the run never enters grace at all. That only works on a simulation card. See "Losing the
+card mid-run" in [simulation.md](simulation.md).
+
+### The grace screen appears immediately after tapping Start
+
+The countdown needs the card in view and it is not. Point the phone back at the card; the run
+resumes into the countdown with its full 3 s.
+
+### Pinching does nothing during the countdown or after time is up
+
+By design. `attemptGrab(at:)` is gated on `phase == .playing`, because every other phase still
+leaves the model on camera and pinching through them would score.
+
+### Play Again starts a run with no snails left
+
+`restoreSnails()` did not run. A released snail is *hidden*, not removed from the entity tree,
+precisely so a second run can put it back — if `updateFadingSnails()` was changed back to
+`removeFromParent()`, or the phase-transition test in `updateGame(cardPresent:candidate:)` was
+loosened, this is what comes back. Note both halves of that test look at where the phase came
+*from*: resuming out of `grace` also lands in `countdown`, and that run's snails must **not** be
+restored.
 
 ### It does not run on the simulator
 

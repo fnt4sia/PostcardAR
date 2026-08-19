@@ -1,7 +1,7 @@
 {
   "images" : [
     {
-      "filename" : "Simulation_coral_with_drupella.png",
+      "filename" : "Showcase_postcard.png",
       "idiom" : "universal"
     }
   ],
@@ -10,7 +10,7 @@
     "version" : 1
   },
   "properties" : {
-    "unit" : "inches",
-    "width" : 6
+    "unit" : "centimeters",
+    "width" : 13
   }
 }
