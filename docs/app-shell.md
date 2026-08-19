@@ -169,15 +169,23 @@ and described what should be true when it is true. That is the whole paradigm.
 private struct ScannerScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var status = ARStatus()
+    @State private var game = GameSession()
 
     var body: some View {
-        PostcardARView(status: status)
+        PostcardARView(status: status, game: game)
             .ignoresSafeArea()
-            .overlay(alignment: .top) { statusPanel }
+            .overlay(alignment: .top) { if showsStatusPanel { statusPanel } }
             .overlay(alignment: .bottom) { Button("Close") { dismiss() } ... }
+            .overlay { runOverlay }
     }
 }
 ```
+
+Two `@Observable` objects are created here and handed down. `status` only ever flows one way —
+the coordinator writes, the panel reads. `game` flows both ways: the coordinator drives its clock
+from the render loop, and **Start** / **Play Again** are buttons in `runOverlay` that change its
+phase from SwiftUI. The coordinator notices those by comparing `game.phase` against the phase it
+saw on the previous frame, rather than by being called — see [simulation.md](simulation.md).
 
 `@Environment(\.dismiss)` pulls a value out of the environment — an implicit dictionary passed
 down the view tree, similar to React context. SwiftUI puts a dismiss action in there for any
@@ -192,6 +200,14 @@ and the space `arView.ray(through:)` consumes it in. The crosshair is a plain
 `UIHostingController` view added directly as a subview of `arView` instead. That move alone
 didn't fully resolve the reported offset, so don't take the coordinate-space theory as
 confirmed — see "The crosshair" in [interaction.md](interaction.md) for the current state.
+but anchored to this specific view's bounds. A third overlay places the pinch crosshair at
+`status.pinchPoint` the same way — see [interaction.md](interaction.md) — and a fourth,
+unaligned so it fills the whole screen, carries the run's UI.
+
+`runOverlay` is a `@ViewBuilder` switch over `game.phase`, one branch each for the instructions,
+the 3 · 2 · 1, the score-and-clock HUD, the grace countdown and the result screen. Everything but
+the HUD sits on the same dimmed backdrop; the HUD deliberately has none, because that is the one
+screen where the coral has to stay visible, so its text carries a shadow instead of a panel.
 
 ## Part 3 — Bridging to UIKit
 
@@ -239,8 +255,8 @@ func makeUIView(context: Context) -> ARView {
 }
 ```
 
-The struct keeps only what SwiftUI hands it (`status`). Anything else stored on it would be
-thrown away and rebuilt on the next recomputation.
+The struct keeps only what SwiftUI hands it (`status` and `game`). Anything else stored on it
+would be thrown away and rebuilt on the next recomputation.
 
 ## Part 4 — The status panel
 
@@ -267,10 +283,10 @@ sequenceDiagram
 ```
 
 `Entity.isAnchored` is precisely "ARKit is tracking this card right now" — the label answers that
-question exactly. The model does not: it keeps rendering at its last held pose while a card goes
-untracked (occluded, say), rather than disappearing with the label — see "Tracking loss" in
-[tracking.md](tracking.md). The two are allowed to disagree by design: the label reports live
-tracking, the model stays put through a brief loss of it.
+question exactly. The models on screen answer a slightly different one: a card lost while a hand
+is in frame keeps its model, locked in place, so the label can read "not detected" with a model
+still drawn — see "Tracking loss, and the occlusion lock" in [tracking.md](tracking.md). The two
+are allowed to disagree by design: the label reports tracking, the screen reports the lock.
 
 One detail that matters at 60 fps:
 
@@ -310,6 +326,17 @@ right now, and how many of the models have loaded. `errors` is a list for the sa
 whose `.usdz` is missing must not overwrite the message from the previous one. Repeats are dropped
 on the way in, because `didFailWithError` can fire on every frame and the panel is a status
 display, not a log.
+
+`lockedImages` and `handInFrame` were added for the same "which half failed" reason, applied to
+the occlusion lock. The lock is invisible when it works — the model simply stays put — and when it
+fails the model is just gone, which could equally mean Vision never saw the hand. Two lines in the
+panel separate those: *Hand in frame* is the lock's input, *Locked: name* is its output. The
+`lockedImages` line is only rendered while something is actually locked, so the panel stays quiet
+in normal use.
+
+The panel is hidden during `countdown`, `playing` and `finished`, where it would sit on top of
+the HUD. It stays up for `grace` on purpose: *Hand in frame* with nothing locked is exactly the
+reading needed when a model failed to hold, and the grace screen is the moment it failed.
 
 What each line means when you are staring at it is in
 [troubleshooting.md](troubleshooting.md).

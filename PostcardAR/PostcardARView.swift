@@ -4,6 +4,12 @@
 //
 //  Camera view that finds printed cards and stands a 3D model on each of them.
 //
+//  A card is one of two kinds, read off the front of its name (see `simulationCardPrefix`):
+//
+//      Showcase     the model appears while the card is tracked and hides when it is not.
+//      Simulation   the occlusion lock may hold the model on screen under a hand, its
+//                   `SeaSnail*` entities are grabbable, and seeing it starts a `GameSession`.
+//
 //  Every reference image in the AR resource group is one card:
 //
 //      worldRoot (static)     one shared anchor, added once, never rewritten
@@ -32,6 +38,15 @@ import Vision
 /// needs `postcard.usdz`. Adding a card is those two files and nothing else; there is no list
 /// of names in the code to keep in step.
 private let resourceGroupName = "AR Resources"
+
+/// A reference image whose name starts with this is a *Simulation* card and runs a minigame;
+/// every other card is a *Showcase* card that only stands its model up to be looked at. See
+/// `CardKind` for what the two actually do differently.
+///
+/// The type travels in the name for the same reason the model does: adding a card stays two
+/// files and no code change, and nothing here names an individual card. Same idiom as the
+/// `SeaSnail` prefix in `collectSnails(in:)`.
+private let simulationCardPrefix = "Simulation"
 
 /// Model width as a fraction of its card's width — `1.0` is exactly as wide as the card.
 /// The only dial for model size, because `fit(_:toCardWidth:named:)` measures the model at load
@@ -174,6 +189,16 @@ struct PinchPointFilter {
                 y: y.filter(point.y, timestamp: timestamp))
     }
 }
+/// Whole-observation confidence for "there is a hand in frame", used by the occlusion lock and
+/// nothing else. Deliberately low, and deliberately not `jointConfidenceMinimum`: reading a pinch
+/// needs four specific joints resolved, whereas locking only needs to know a hand is there — and
+/// the hand covering a card is exactly the pose those four joints are hardest to read from.
+private let handPresenceConfidence: Float = 0.1
+
+/// How long after the last hand sighting a hand still counts as being in frame. Longer than
+/// `handPoseLossTimeout` on purpose: this one keeps a model locked in place, and a model blinking
+/// out on a dropped sample or two is far more noticeable than a late release.
+private let handPresenceTimeout: TimeInterval = 1.0
 
 // MARK: - Status
 
@@ -185,6 +210,15 @@ struct PinchPointFilter {
 final class ARStatus {
     /// Names of the reference images being tracked right now, in the card order.
     var detectedImages: [String] = []
+
+    /// Names of the cards whose model is on screen without their card being tracked — held there
+    /// by the occlusion lock. Reported because the lock is otherwise invisible when it fails:
+    /// a model that vanishes tells you nothing about whether the hand was seen.
+    var lockedImages: [String] = []
+
+    /// Whether a hand counts as being in frame right now — the lock's input, on screen so a
+    /// failure to lock can be told apart from a failure to see the hand.
+    var handInFrame = false
 
     /// How many `.usdz` files have finished loading, out of one per reference image.
     var loadedModels = 0
@@ -204,9 +238,10 @@ final class ARStatus {
 /// wrong place to own anything that has to outlive a single `body` pass.
 struct PostcardARView: UIViewRepresentable {
     let status: ARStatus
+    let game: GameSession
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(status: status)
+        Coordinator(status: status, game: game)
     }
 
     func makeUIView(context: Context) -> ARView {
@@ -234,9 +269,27 @@ extension PostcardARView {
         /// A struct, kept in an array the coordinator mutates in place. `anchor` and `pivot` are
         /// entities — classes — so a copy of the struct still refers to the same two entities;
         /// only `heldPose` needs the in-place mutation.
+        /// What a card is for, read off the front of its name — see `simulationCardPrefix`.
+        ///
+        /// Three things turn on this and nothing else does: whether the occlusion lock may hold
+        /// the model on screen, whether its `SeaSnail*` entities go into the grabbable pool, and
+        /// whether seeing the card starts a run.
+        private enum CardKind {
+            /// Look at it. The model appears while the card is tracked and hides the moment it
+            /// is not — there is nothing to reach for, so nothing to protect from a hand.
+            case showcase
+
+            /// Play on it. The lock keeps the model alive under a hand, its snails are grabbable,
+            /// and detecting it starts a `GameSession`.
+            case simulation
+        }
+
         private struct Card {
             /// The image's name in the asset catalog, which is also its `.usdz`'s name.
             let name: String
+
+            /// Showcase or simulation, decided by `name`'s prefix at build time of the array.
+            let kind: CardKind
 
             /// The card's printed width in metres, straight off the asset catalog entry.
             let width: Float
@@ -251,8 +304,10 @@ extension PostcardARView {
             let anchor: AnchorEntity
 
             /// Ours. A plain `Entity` has no anchoring component, so what we write to it stays.
-            /// Parented to the shared `worldRoot`, not to `anchor` — keeps rendering at its last
-            /// pose while the card is occluded, instead of vanishing with the anchor.
+            /// Parented to the shared `worldRoot`, not to `anchor` — which also means RealityKit
+            /// never hides it for us, so `isEnabled` is driven by hand in `onRenderFrame()`, and
+            /// doubles as the occlusion lock's state. Starts off: a pivot nobody has posed yet
+            /// sits at the world origin.
             let pivot: Entity
 
             /// Where this card's model is currently being held, in world space. Compared against
@@ -263,6 +318,20 @@ extension PostcardARView {
 
         private let status: ARStatus
 
+        /// The run. Driven from the render loop, drawn by the overlays in `ContentView`.
+        private let game: GameSession
+
+        /// Name of the simulation card the current run belongs to, `nil` between runs.
+        ///
+        /// One run at a time: the first simulation card tracked claims the session and holds it
+        /// until the run is wiped, so a second simulation card entering frame is only a model.
+        private var activeSimulationCard: String?
+
+        /// `game.phase` as of the previous frame. The instruction and result screens change the
+        /// phase from SwiftUI, and this is how the coordinator notices that a fresh run needs its
+        /// picked-off snails put back.
+        private var lastGamePhase: GameSession.Phase = .idle
+
         /// One per reference image, built in `start(in:)` and never added to afterwards.
         private var cards: [Card] = []
 
@@ -272,14 +341,27 @@ extension PostcardARView {
         /// For projecting/raycasting and reading `session.currentFrame` in the pinch code below.
         private weak var arView: ARView?
 
-        /// Every `SeaSnail*` entity across every loaded model, flattened.
-        private var snails: [Entity] = []
+        /// One grabbable drupella snail.
+        private struct Snail {
+            let entity: Entity
+
+            /// Its local transform when the model loaded, so Play Again can put it back on the
+            /// coral. A released snail is hidden rather than deleted precisely so this works.
+            let home: Transform
+
+            /// Already picked off. Not grabbable, and hidden once its fade finishes.
+            var removed = false
+        }
+
+        /// Every `SeaSnail*` entity across every loaded *simulation* model, flattened. Showcase
+        /// models are never collected, which is the whole of "no pinch on a showcase card".
+        private var snails: [Snail] = []
 
         /// The snail being dragged, and the camera distance it was grabbed at (held constant for
         /// the drag). `nil` also gates pickup to one at a time.
         private var held: (entity: Entity, depth: Float)?
 
-        /// Released snails, fading toward `opacity == 0` before `removeFromParent()`.
+        /// Released snails, fading toward `opacity == 0` before being hidden.
         private var fading: [(entity: Entity, opacity: Float)] = []
 
         /// Reused across samples rather than rebuilt each time.
@@ -310,6 +392,15 @@ extension PostcardARView {
         /// Displayed pinch point — crosshair and drag both read this, set from each raw sample
         /// after `pinchPointFilter` damps it. No render-loop glide stage: gliding toward a target
         /// that itself only moves at `handPoseSampleInterval` (15 Hz) reads as steady-state lag.
+        /// Last sample whose four pinch joints all resolved — what `handPoseLossTimeout` counts
+        /// against, so a hand that leaves mid-grab eventually drops what it was holding.
+        private var lastConfidentHandTime = Date.distantPast
+
+        /// Last sample that saw a hand at all, however poorly resolved — what the occlusion lock
+        /// counts against. A hand covering a card reads well enough here and badly above.
+        private var lastHandSeenTime = Date.distantPast
+
+        /// Screen point of the most recent pinch sample; drag reuses it between samples.
         private var pinchPoint: CGPoint?
 
         /// One Euro filter state for `pinchPoint` — reset (fresh `PinchPointFilter()`) whenever
@@ -329,7 +420,9 @@ extension PostcardARView {
         private var crosshairHost: UIHostingController<PinchCrosshair>?
 
         init(status: ARStatus) {
+        init(status: ARStatus, game: GameSession) {
             self.status = status
+            self.game = game
         }
 
         /// Starts tracking, builds an `anchor -> pivot` branch per reference image, and begins
@@ -359,6 +452,17 @@ extension PostcardARView {
             // and frozen — the exact failure image tracking was chosen to avoid.
             configuration.maximumNumberOfTrackedImages = referenceImages.count
 
+            // People occlusion: ARKit mattes hands and arms out of the rendered frame per pixel,
+            // using the segmentation *depth* rather than a flat cut-out, so a hand in front of a
+            // model hides it and a hand behind it does not. RealityKit applies this on its own
+            // once the semantic is on — there is nothing to switch on in `ARView`.
+            //
+            // Needs an A12 or later, and `supportsFrameSemantics` is not advice: setting an
+            // unsupported semantic throws. Older devices simply draw models over the hand.
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) {
+                configuration.frameSemantics.insert(.personSegmentationWithDepth)
+            }
+
             arView.session.delegate = self // For errors only — see the note on the render loop.
             arView.session.run(configuration)
 
@@ -382,11 +486,18 @@ extension PostcardARView {
 
                 let anchor = AnchorEntity(.image(group: resourceGroupName, name: name))
                 let pivot = Entity()
+                // Off until this card is actually tracked. A pivot hangs off the static
+                // `worldRoot`, not off its own image anchor, so nothing hides it for us: left
+                // enabled it would draw its model at the world origin — the spot the session
+                // started at — from the moment the `.usdz` loads, which on camera looks like
+                // some other card's model standing on the card you are pointing at.
+                pivot.isEnabled = false
                 worldRoot.addChild(pivot)
                 arView.scene.addAnchor(anchor)
 
                 cards.append(Card(
                     name: name,
+                    kind: name.hasPrefix(simulationCardPrefix) ? .simulation : .showcase,
                     width: Float(image.physicalSize.width),
                     anchor: anchor,
                     pivot: pivot
@@ -435,11 +546,51 @@ extension PostcardARView {
         private func onRenderFrame() {
             var detected: [String] = []
 
+            // A hand across the card is the ordinary way tracking is lost, and it is also the
+            // moment the player is reaching for something — so a hand in frame locks whatever is
+            // already showing in place rather than letting it blink out. Holding a snail counts
+            // as a hand regardless of what Vision managed to read on the last sample.
+            let handInFrame = held != nil
+                || Date().timeIntervalSince(lastHandSeenTime) < handPresenceTimeout
+            var locked: [String] = []
+
+            // The first simulation card tracked this frame — what claims the session if no run
+            // is under way — and whether the card the current run belongs to is on screen at all.
+            var trackedSimulation: String?
+            var activeCardPresent = false
+
             for index in cards.indices {
-                // While untracked, the pivot is simply left alone — it keeps rendering at
-                // `heldPose` since it lives under `worldRoot`, not this card's own anchor. The
-                // label can say "not detected" while the model keeps holding its place.
-                guard cards[index].anchor.isAnchored else { continue }
+                let tracked = cards[index].anchor.isAnchored
+                let isSimulation = cards[index].kind == .simulation
+
+                // `pivot.isEnabled` is the lock itself. Only a tracked frame can turn it on, so a
+                // card that has never been seen stays dark no matter what the hand does — which
+                // is what keeps every other card's model out of the frame, since all of them load
+                // at launch and an unposed pivot sits at the world origin. Once on, it stays on
+                // while the card is tracked *or* a hand is in frame, and goes off the moment
+                // both are gone.
+                //
+                // Simulation cards only. The lock exists so that reaching into the scene does not
+                // delete the thing you are reaching for; a showcase card has nothing to reach for,
+                // so it hides the moment its card leaves and never lingers under a passing hand.
+                let visible = tracked || (cards[index].pivot.isEnabled && handInFrame && isSimulation)
+                if cards[index].pivot.isEnabled != visible {
+                    cards[index].pivot.isEnabled = visible
+                }
+
+                if isSimulation {
+                    if tracked, trackedSimulation == nil { trackedSimulation = cards[index].name }
+                    // Present, not tracked: a locked card is still a card you can play on, which
+                    // is the entire point of the lock. This is what keeps a run alive under a hand.
+                    if cards[index].name == activeSimulationCard { activeCardPresent = visible }
+                }
+
+                // Untracked cards keep `heldPose` — locked or hidden, the model holds its last
+                // pose, so a card that comes back glides on from where it was instead of snapping.
+                guard tracked else {
+                    if visible { locked.append(cards[index].name) }
+                    continue
+                }
 
                 detected.append(cards[index].name)
                 hold(&cards[index])
@@ -450,10 +601,53 @@ extension PostcardARView {
             if status.detectedImages != detected {
                 status.detectedImages = detected
             }
+            if status.lockedImages != locked {
+                status.lockedImages = locked
+            }
+            if status.handInFrame != handInFrame {
+                status.handInFrame = handInFrame
+            }
 
+            updateGame(cardPresent: activeCardPresent, candidate: trackedSimulation)
             updatePinchDetection()
             updateHeldSnail()
             updateFadingSnails()
+        }
+
+        // MARK: The run
+
+        /// Drives the `GameSession` from what the camera can see, and applies the two things a
+        /// phase change means to the scene: a fresh run needs its snails back, and nothing is
+        /// grabbable outside a live run.
+        private func updateGame(cardPresent: Bool, candidate: String?) {
+            if activeSimulationCard == nil, let candidate {
+                activeSimulationCard = candidate
+                game.begin()
+            }
+
+            game.update(cardPresent: cardPresent)
+
+            // Wiped: the card stayed away past the grace period. Let go of it so the next scan —
+            // this card or another — starts a run from zero rather than resuming this one.
+            if game.phase == .idle {
+                activeSimulationCard = nil
+            }
+
+            // Both entry points into a fresh run, spotted here rather than in the buttons because
+            // the buttons live in SwiftUI and the entities live here. Resuming out of `.grace`
+            // also lands in `.countdown` or `.playing` and must *not* restore — that run is the
+            // same run, snails and all — which is why these test where the phase came from.
+            if (game.phase == .instructions && lastGamePhase != .instructions)
+                || (game.phase == .countdown && lastGamePhase == .finished) {
+                restoreSnails()
+            }
+            lastGamePhase = game.phase
+
+            // A snail still in hand when the run stops — buzzer, or the card walking out of frame
+            // — is dropped rather than carried into whatever comes next.
+            if game.phase != .playing, held != nil {
+                releaseHeld()
+            }
         }
 
         /// Writes one card's pivot in world space, filtered — dead band, then glide.
@@ -630,6 +824,33 @@ extension PostcardARView {
                     // Neither tip readable this sample. Hold the last point rather than erasing
                     // it — same dead-band idiom as the card pose filter.
                     if pinchClosed, Date().timeIntervalSince(lastPinchEvaluationTime) >= handPoseLossTimeout {
+                // No orientation hint — Vision then leaves joints in `capturedImage`'s own
+                // coordinate space, which is what `displayTransform` below expects. A hint would
+                // hand back already-rotated coordinates and double-rotate the point.
+                let hands = (try? await handPoseRequest.perform(on: pixelBuffer)) ?? []
+
+                // Presence is a far looser question than pinching, and has to be asked first.
+                // A hand held flat over a card — the case the lock exists for — is usually a
+                // palm filling the frame with the wrist cropped off and the knuckles hidden
+                // behind the fingers: Vision still returns the hand, but the four joints below
+                // do not all clear their threshold. Gating presence on those joints meant the
+                // lock never engaged in exactly the situation it was written for.
+                if let hand = hands.first, hand.confidence > handPresenceConfidence {
+                    lastHandSeenTime = Date()
+                }
+
+                guard
+                    let hand = hands.first,
+                    let thumb = hand.joint(for: .thumbTip), thumb.confidence > jointConfidenceMinimum,
+                    let index = hand.joint(for: .indexTip), index.confidence > jointConfidenceMinimum,
+                    let wrist = hand.joint(for: .wrist), wrist.confidence > jointConfidenceMinimum,
+                    let knuckle = hand.joint(for: .indexMCP), knuckle.confidence > jointConfidenceMinimum
+                else {
+                    // No confident hand this sample. Hide the crosshair immediately; a held
+                    // snail only force-releases after `handPoseLossTimeout`, so one dropped
+                    // sample mid-hold doesn't drop it.
+                    status.pinchPoint = nil
+                    if pinchClosed, Date().timeIntervalSince(lastConfidentHandTime) >= handPoseLossTimeout {
                         pinchClosed = false
                         releaseHeld()
                     }
@@ -710,22 +931,34 @@ extension PostcardARView {
         /// Picks the nearest snail to the pinch point by projected screen position, not a hit
         /// test (needs collision shapes, wrong node in the hierarchy). No-op if already holding.
         private func attemptGrab(at point: CGPoint) {
-            guard held == nil, let arView, let cameraTransform = arView.session.currentFrame?.camera.transform
+            // Only during a live run. Instructions, countdown, grace and the result screen all
+            // leave the model on camera, and pinching through any of them would score.
+            guard game.phase == .playing, held == nil, let arView,
+                  let cameraTransform = arView.session.currentFrame?.camera.transform
             else { return }
             let cameraPosition = cameraTransform.columns.3
 
-            let nearest = snails
-                .compactMap { snail -> (Entity, CGFloat)? in
-                    guard let projected = arView.project(snail.position(relativeTo: nil)) else { return nil }
-                    return (snail, hypot(projected.x - point.x, projected.y - point.y))
+            let nearest = snails.indices
+                .compactMap { index -> (Int, CGFloat)? in
+                    // A snail already picked off, or on a card that is not on screen, is not
+                    // there to grab.
+                    guard !snails[index].removed, snails[index].entity.isEnabledInHierarchy,
+                          let projected = arView.project(snails[index].entity.position(relativeTo: nil))
+                    else { return nil }
+                    return (index, hypot(projected.x - point.x, projected.y - point.y))
                 }
                 .filter { $0.1 < pinchPickRadius }
                 .min { $0.1 < $1.1 }
 
-            guard let (snail, _) = nearest else { return }
+            guard let (index, _) = nearest else { return }
+            let snail = snails[index].entity
             let depth = simd_distance(SIMD3(cameraPosition.x, cameraPosition.y, cameraPosition.z),
                                        snail.position(relativeTo: nil))
+            snails[index].removed = true
             held = (snail, depth)
+            // Scored at the grab, not the release: a grabbed snail always ends up removed, so
+            // this is the moment it is committed — and the moment the player feels the haptic.
+            game.scored()
             pinchHaptics?.impactOccurred()
         }
 
@@ -738,7 +971,8 @@ extension PostcardARView {
             entity.setPosition(ray.origin + ray.direction * depth, relativeTo: nil)
         }
 
-        /// Lets go of the held snail — moves it into `fading`; it never returns to `snails`.
+        /// Lets go of the held snail — moves it into `fading`. It stays in `snails` marked
+        /// `removed`, ungrabbable until `restoreSnails()` puts it back for the next run.
         private func releaseHeld() {
             guard let (entity, _) = held else { return }
             held = nil
@@ -746,17 +980,38 @@ extension PostcardARView {
             pinchHaptics?.impactOccurred(intensity: 0.4) // softer than the grab: this end is expected
         }
 
-        /// Steps every fading snail's opacity down and removes it at zero. Manual, not
+        /// Steps every fading snail's opacity down and hides it at zero. Manual, not
         /// `AnimationResource` — reuses this loop instead of a second animation subscription.
+        ///
+        /// Hidden rather than `removeFromParent()`: Play Again needs the same snails back on the
+        /// same coral, and keeping them in the tree makes that a transform reset instead of a
+        /// second load of a model already in memory. See `restoreSnails()`.
         private func updateFadingSnails() {
             for index in fading.indices.reversed() {
                 fading[index].opacity -= pinchFadeStep
                 if fading[index].opacity <= 0 {
-                    fading[index].entity.removeFromParent()
+                    fading[index].entity.isEnabled = false
                     fading.remove(at: index)
                 } else {
                     fading[index].entity.components.set(OpacityComponent(opacity: fading[index].opacity))
                 }
+            }
+        }
+
+        /// Puts every picked-off snail back where its model loaded, ready for another run.
+        ///
+        /// `home` is a *local* transform, so restoring it re-seats the snail on the coral wherever
+        /// the coral currently is — dragging writes world-space positions into that same local
+        /// transform, which is exactly what this undoes.
+        private func restoreSnails() {
+            held = nil
+            fading.removeAll()
+            for index in snails.indices {
+                let entity = snails[index].entity
+                entity.transform = snails[index].home
+                entity.components.remove(OpacityComponent.self)
+                entity.isEnabled = true
+                snails[index].removed = false
             }
         }
 
@@ -777,7 +1032,13 @@ extension PostcardARView {
                         removeCameras(from: model)
                         fit(model, toCardWidth: card.width, named: card.name)
                         card.pivot.addChild(model)
-                        snails.append(contentsOf: collectSnails(in: model))
+                        // Showcase models are looked at, not touched, so their snails never enter
+                        // the grabbable pool — `attemptGrab(at:)` has nothing to find on one.
+                        if card.kind == .simulation {
+                            snails.append(contentsOf: collectSnails(in: model).map {
+                                Snail(entity: $0, home: $0.transform)
+                            })
+                        }
                         status.loadedModels += 1
                     } catch {
                         report("Could not load \(card.name).usdz: \(error.localizedDescription)")

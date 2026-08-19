@@ -159,7 +159,9 @@ separate raw-vs-displayed split.
 
 ## Grab, drag, release
 
-**Grab** (`attemptGrab(at:)`) is nearest-by-screen-position among `snails` within
+**Grab** (`attemptGrab(at:)`) is gated on `game.phase == .playing` — instructions, countdown,
+grace and the result screen all leave the model on camera, and pinching through any of them would
+otherwise score. Past that gate it is nearest-by-screen-position among `snails` within
 `pinchPickRadius` points of the pinch point — not a `RealityKit` hit test, which needs collision
 shapes on every snail and would return whatever entity is topmost in the hierarchy rather than
 whichever one is visually closest to the pinch. The chosen snail's distance from the camera is
@@ -171,9 +173,56 @@ snail at the fixed grab depth along that ray. Fixed depth means the snail tracks
 point at constant distance, rather than sliding toward or away from the camera.
 
 **Release** (`releaseHeld()`) moves the entity into `fading` rather than deleting it immediately.
-`updateFadingSnails()` steps its opacity down by `pinchFadeStep` each frame and removes it at
+`updateFadingSnails()` steps its opacity down by `pinchFadeStep` each frame and **hides** it at
 zero — a plain per-frame loop rather than `AnimationResource`, since the render loop is already
 iterating every frame regardless.
+
+Hidden, not `removeFromParent()`: Play Again needs the same snails back on the same coral, and
+keeping them in the tree makes that a transform reset rather than a second load of a model already
+in memory. Each one carries the local transform it loaded with, and `restoreSnails()` puts it back
+— see "Scoring, and putting the snails back" in [simulation.md](simulation.md).
+
+**Forced release.** If a pinch is closed and Vision stops confidently seeing a hand for
+`handPoseLossTimeout`, the snail releases anyway — a hand that lifts out of frame mid-grab would
+otherwise never produce the "opened" sample `evaluatePinch` needs to let go with, and the snail
+would stay stuck held forever.
+
+**Grabbing is limited to visible models.** `attemptGrab(at:)` skips snails that are not
+`isEnabledInHierarchy`, so a card that is neither tracked nor locked cannot have its snails picked
+up through the camera image. It also skips snails already marked `removed`, so a fading snail
+cannot be re-grabbed on its way out.
+
+**Scoring happens here, not at the release.** A grabbed snail always ends up removed — there is no
+putting one back — so the grab is the moment it is committed, and the moment the haptic fires.
+
+## Hand presence also locks the cards
+
+Each sample updates two separate clocks, and the difference between them is the whole reason the
+lock works at all:
+
+| Clock | Set when | Window | Effect |
+|---|---|---|---|
+| `lastConfidentHandTime` | all four pinch joints clear `jointConfidenceMinimum` | `handPoseLossTimeout`, 0.3 s | a held snail force-releases |
+| `lastHandSeenTime` | Vision returned *any* hand above `handPresenceConfidence` (0.1, whole-observation) | `handPresenceTimeout`, 1.0 s | card models already on screen stay on screen, frozen, though ARKit has lost the card |
+
+**Presence is a looser question than pinching, and asking it the strict way is a bug.** A hand
+held flat over a card is a palm filling the frame with the wrist cropped away and the knuckles
+hidden behind the fingers. Vision still returns that hand — `HumanHandPoseObservation.confidence`
+is respectable — but `.wrist` and `.indexMCP` do not resolve, so the pinch guard rejects the
+sample. Gating the lock on that guard meant the lock never fired in the one situation it was
+written for: hand over card, card lost, model gone.
+
+So presence reads the observation, not the joints, and is checked *before* the pinch guard rather
+than after it. Holding a snail also counts as presence outright (`held != nil`), since a hand that
+is mid-grab is unarguably there whatever the current sample managed to resolve.
+
+The lock exists because reaching for a snail is the very thing that covers the card; without it
+the model vanishes at the moment of the grab. The full rule, including why a never-detected card
+can never be locked into view, is in "Tracking loss, and the occlusion lock" in
+[tracking.md](tracking.md).
+
+Hands are also matted out of the render by ARKit's people occlusion, so a hand passed in front of
+a snail hides it instead of being painted over — see "People occlusion" in the same file.
 
 ## Finding the snails
 
@@ -187,10 +236,14 @@ private func collectSnails(in entity: Entity) -> [Entity] {
 }
 ```
 
-Walked once per model, right after `fit(_:toCardWidth:named:)` in `loadModels()`, and flattened
-into one `snails` array shared across every card — pickup works on whichever snail is nearest the
-pinch, regardless of which card's model it came from. Anything not named `SeaSnail*` (the coral,
-say) is inert scenery and never enters the array.
+Walked once per **simulation** model, right after `fit(_:toCardWidth:named:)` in `loadModels()`,
+and flattened into one `snails` array shared across every simulation card — pickup works on
+whichever snail is nearest the pinch, regardless of which card's model it came from. Anything not
+named `SeaSnail*` (the coral, say) is inert scenery and never enters the array.
+
+A showcase card's model is never walked at all, which is the whole implementation of "no pinch on
+a showcase card": `attemptGrab(at:)` has nothing to find on one, with no extra test. See
+[simulation.md](simulation.md).
 
 ## Haptics
 

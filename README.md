@@ -1,8 +1,13 @@
 # PostcardAR
 
 An iOS app that recognises printed cards through the camera and stands a 3D model on each one.
-Hold a card up, move it, tilt it — its model stays attached. Pinch a small creature in the model
-and it comes along for the ride until you let go.
+Hold a card up, move it, tilt it — its model stays attached.
+
+Cards come in two kinds, decided by the front of the card's name:
+
+- **Showcase** — the model is there to be looked at. Nothing to do.
+- **Simulation** — a minigame runs on it. Drupella snails are eating the coral; pinch them off,
+  as many as you can in 30 seconds.
 
 Everything is first-party Apple: SwiftUI for the shell, ARKit for tracking, RealityKit for
 rendering, Vision for the pinch gesture. No third-party dependencies, no package manager, four
@@ -33,21 +38,24 @@ xcodebuild -project PostcardAR.xcodeproj -scheme PostcardAR -sdk iphoneos build
 
 ## Adding a card
 
-**The name is the link.** A reference image called `postcard` shows `postcard.usdz`. Nothing in
-the code names a card, so adding one is two files and no code change.
+**The name is the link**, and it carries the card's kind too. A reference image called
+`Showcase_postcard` shows `Showcase_postcard.usdz`; a name starting `Simulation` runs the minigame
+on that card. Nothing in the code names a card, so adding one is two files and no code change.
 
 ```
 PostcardAR/
   Assets.xcassets/AR Resources.arresourcegroup/
-    postcard.arreferenceimage      ← the image ARKit looks for
-    menu.arreferenceimage
-  postcard.usdz                    ← what appears on it
-  menu.usdz
+    Simulation_coral_with_drupella.arreferenceimage   ← the image ARKit looks for
+    Showcase_postcard.arreferenceimage
+  Simulation_coral_with_drupella.usdz                 ← what appears on it
+  Showcase_postcard.usdz
 ```
 
 1. **Print the card**, and photograph it flat on, evenly lit, no glare, cropped to its edges.
 2. **Add the image.** In `Assets.xcassets`, select **AR Resources**, drag the image in, and name
-   the entry after the model it should show.
+   the entry after the model it should show — prefixed `Simulation` if it should run the minigame,
+   `Showcase` otherwise. (Only `Simulation` is tested for; any other prefix, or none, is a
+   showcase card.)
 3. **Set the physical size** in the Attributes Inspector — measure the printed card with a ruler.
    This decides how far away and how *large* the model is, so approximately right is fine but
    wrong is visible.
@@ -68,6 +76,8 @@ own model and its own printed size.
 | Camera freezes, no error | The `.usdz` brought a camera from Blender. Stripped automatically at load; see [docs/models.md](docs/models.md). |
 | Everything stutters | Model weight. Budget 512² textures and under ~50k triangles, *shared* across all cards — every model loads at launch and stays resident. |
 | A card with no `.usdz` | Tracks fine, shows nothing, and the status panel names the missing file. |
+| No minigame on a card | It is a showcase card. Only a name starting `Simulation` runs one, and the `.usdz` needs the same prefix. |
+| The run restarted from zero | The card left frame with no hand in it for more than 5 seconds. Inside 5 seconds the score and clock are held; keeping a hand in frame holds the model indefinitely. |
 
 ## What it looks like inside
 
@@ -84,13 +94,16 @@ One branch per reference image, all built at startup. ARKit re-solves each card'
 scratch every frame, so the raw pose shivers; a dead-band filter on the pivot is what makes the
 models sit still. The anchors themselves are never written to — RealityKit overwrites any such
 write from the anchoring target, and the model appears frozen at the origin. The pivot hangs off
-a shared static anchor rather than the card's own, so a model keeps its last pose through a brief
-occlusion instead of vanishing with it — see [docs/tracking.md](docs/tracking.md).
+a shared static anchor rather than the card's own, which makes the pose ours to write — and the
+visibility ours to drive too: only a tracked card can put its model on screen, and a card lost
+while a hand is in frame keeps its model locked in place until the hand leaves — see
+[docs/tracking.md](docs/tracking.md).
 
 | Path | Purpose |
 |---|---|
-| `PostcardAR/ContentView.swift` | Start button, and the camera screen's status overlay |
+| `PostcardAR/ContentView.swift` | Start button, the camera screen's status overlay, and the minigame's UI |
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, cards, filter, model loading, and pinch pickup |
+| `PostcardAR/GameSession.swift` | The minigame's phases, score, and clocks |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world size |
 | `PostcardAR/<name>.usdz` | The model for the card of that name |
 | `docs/` | Design notes, one file per area |
@@ -108,6 +121,7 @@ The camera permission string lives in the build settings as
 | [docs/smoothing.md](docs/smoothing.md) | Why the models hold still, and the three constants that tune it |
 | [docs/app-shell.md](docs/app-shell.md) | SwiftUI from scratch: views, state, the UIKit bridge, the status panel |
 | [docs/interaction.md](docs/interaction.md) | Pinch pickup: Vision hand-pose sampling, grab/drag/release |
+| [docs/simulation.md](docs/simulation.md) | Showcase vs Simulation cards, the run's phases and clocks, what losing the card mid-run does |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom → cause, starting from the status panel |
 
 `CLAUDE.md` is the working agreement for AI-assisted changes to this repo — the invariants that
@@ -116,15 +130,28 @@ must not be broken, and the house rules.
 ## State
 
 Working: several cards tracked at once, each showing the `.usdz` of its own name, scaled to its
-own printed size, smoothed so it does not shiver, and holding its last pose through a brief
-occlusion rather than disappearing. Pinch pickup on `SeaSnail*` entities — see
-[docs/interaction.md](docs/interaction.md).
+own printed size, smoothed so it does not shiver, and drawn only once its own card has been
+tracked — scanning one card never brings another card's model with it. Hands occlude the models
+properly (ARKit people occlusion, A12 and later).
+
+Simulation cards run the full loop: instructions, a 3 · 2 · 1, thirty seconds of pinching drupella
+off the coral with the score and clock on screen, then a result with **Play Again**. A card lost
+while a hand is in frame locks its model in place instead of blinking it out, so reaching for a
+snail does not make it disappear, and the run carries on. A card lost with no hand freezes the run
+for five seconds before wiping it — see [docs/simulation.md](docs/simulation.md).
+
+Showcase cards do none of that: model on with the card, model off with the card.
 
 Not implemented:
 
-- **A fade on tracking loss that lasts long enough to actually leave the frame.** Right now a
-  card that truly leaves — not just gets occluded — leaves its model in place indefinitely
-  rather than eventually fading it out.
+- **A fade on the hide.** A card that leaves with no hand in frame cuts its model out on the next
+  frame; a short fade out and back in would read better than the cut.
+- **More than one run at a time.** The first simulation card tracked claims the session; a second
+  one in frame is only a model. A second run would need a second HUD, so the shape to reach for
+  would be a session per card.
+- **Any minigame but the drupella one.** The rules live in `GameSession` and the scoring call in
+  `attemptGrab(at:)`; a different game on a different simulation card would need those split per
+  card rather than shared.
 - **Pinch gestures on anything but `SeaSnail*` entities** (scaling or spinning the model itself,
   say). If added, write to the model entity or a second pivot — never to the anchor, and not to
   the existing pivot, whose world transform is rewritten every frame.

@@ -90,9 +90,16 @@ AnchorEntity(.image)   ← ARKit writes that card's pose here, every frame; read
 ```
 
 Each card's `pivot` hangs off a single shared `worldRoot` — `AnchorEntity(world: .zero)`, added
-once and never written to — rather than off that card's own image anchor. This is what keeps a
-card's model on screen while its anchor goes untracked: RealityKit hides an anchor's *descendants*
-whenever that anchor is untracked, and `pivot` is no longer one. See "Tracking loss" below.
+once and never written to — rather than off that card's own image anchor. That is what makes the
+pose ours to write: an anchor's transform cannot be written to, and a pivot under a *static*
+anchor inherits nothing that moves.
+
+The cost of that parenting is that RealityKit no longer hides the model for us. It hides an
+anchor's *descendants* while that anchor is untracked, and `pivot` is not one — so a pivot left
+enabled draws its model at the world origin (wherever the session started) from the moment the
+`.usdz` finishes loading, whether or not its card was ever seen. Visibility is therefore ours to
+drive too: pivots are created with `isEnabled = false`, and the render loop turns each one on and
+off with its own card's `isAnchored`. See "Tracking loss" below.
 
 There is one `anchor`/`pivot`/model triple per reference image, and they are independent: each
 has its own filter state. All of them are built and added to the scene at startup, because an
@@ -131,22 +138,113 @@ anchor and the model. Nothing but our code touches it.
 The anchor's local axes follow the image: x across its width, z down its height, y pointing out
 of the card's surface.
 
-## Tracking loss
+## Tracking loss, and the occlusion lock
 
-The render loop simply stops updating a card's `pivot` while its anchor is untracked — no
-frame writes it, so it holds its last pose. Because `pivot` is parented to the shared
-`worldRoot` rather than to the card's own image anchor, it stays in the visible tree the whole
-time: nothing hides it, so the model sits exactly where it was, occluded or not.
+Visibility is not RealityKit's to decide here. It hides an anchor's *descendants* while that
+anchor is untracked, and `pivot` is not one — it hangs off the static `worldRoot`. Left enabled,
+a pivot renders its model at the identity transform, i.e. the world origin, roughly where the
+phone was when the session started. Every model in the group loads at launch, so all of them pile
+up there and whichever card you point at near that spot appears to have spawned them. Visibility
+is therefore driven by hand, once per rendered frame, from two facts:
 
-This is deliberately not the same question as "is the label allowed to say detected". The status
-label is still driven straight off `Entity.isAnchored`, so it correctly says "not detected"
-while the model keeps holding its place — the two are allowed to disagree on purpose. See
-"Status" in the project root `CLAUDE.md`.
+```swift
+let handInFrame = held != nil
+    || Date().timeIntervalSince(lastHandSeenTime) < handPresenceTimeout
+let isSimulation = cards[index].kind == .simulation
+let visible = tracked || (cards[index].pivot.isEnabled && handInFrame && isSimulation)
+```
 
-Coming back is not a separate case: `heldPose` is left untouched by tracking loss, so the next
-tracked pose glides in from it exactly like any other movement (see
+Read it as three rules, for a **simulation** card:
+
+| Card tracked | Hand in frame | Model |
+|---|---|---|
+| yes | either | drawn, pose updated |
+| no | yes, and it was already showing | **locked** — stays exactly where it was, pose frozen |
+| no | no | hidden |
+
+A **showcase** card has only the first and last rows: it hides the instant its card is lost,
+whatever the hand is doing. The lock exists so that reaching into the scene does not delete the
+thing you are reaching for, and there is nothing to reach for on a showcase card — see
+[simulation.md](simulation.md) for what else the two kinds differ in.
+
+`pivot.isEnabled` is both the answer and the lock's own state, which is what keeps the rule to one
+line and no extra flags. Only a `tracked` frame can turn it on, so a card that has never been
+detected shows nothing whatever the hand does — the lock can hold a model, never summon one.
+
+**Why the lock.** A hand across the card is the ordinary reason ARKit loses it, and it is exactly
+the moment the player is reaching for something. Blinking the model out then would make the app
+unusable to touch: reach for a snail, the card is covered, the snail vanishes. So a hand in frame
+means "this loss is me, hold everything", and the model only clears once the hand is gone too.
+Interaction keeps working throughout: a locked model is enabled, so its snails stay grabbable,
+which is what makes this the foundation for game mechanics that outlive a moment of tracking.
+
+**"In frame" has to be asked loosely.** `lastHandSeenTime` is set from
+`HumanHandPoseObservation.confidence` alone, before any joint is inspected — see "Hand presence
+also locks the cards" in [interaction.md](interaction.md). The first version of this lock reused
+the pinch guard's four-joint test and consequently never fired: a palm laid over a card crops its
+own wrist out of frame and hides its knuckles, which is fine for "is there a hand" and useless for
+"where are the fingertips". `handPresenceTimeout` (1.0 s) is also much longer than
+`handPoseLossTimeout` — Vision samples at 15 Hz, a dropped sample or two must not blink a model
+out, while a slightly late release of a held snail is barely noticeable.
+
+**Seeing it work.** The status panel reports both halves: a green *Hand in frame* line whenever
+presence is live, and a yellow *Locked: name* line for any card whose model is on screen without
+its card being tracked. A model that disappears when it should have locked is then two different
+bugs told apart at a glance — no hand seen (Vision), or hand seen and no lock (this rule).
+
+The status label still reads `Entity.isAnchored` directly, so it says "not detected" while a
+locked model is on screen. That disagreement is the lock being visible in the UI, not a bug.
+
+Coming back is not a separate case: `heldPose` is left untouched whether the model was locked or
+hidden, so the next tracked pose glides in from it exactly like any other movement (see
 [smoothing.md](smoothing.md)). A card that reappears where it was reads as having never moved; a
 card that reappears somewhere else glides there over about half a second rather than snapping.
+
+Pinch pickup follows the same visibility rule from the other side: `attemptGrab(at:)` skips any
+snail that is not `isEnabledInHierarchy`, so a hidden card's snails cannot be grabbed off screen,
+while a locked card's can.
+
+The run running on the card reads the lock the same way. `GameSession` is told
+`cardPresent: visible`, not `cardPresent: tracked`, so a card held by the lock keeps its run alive
+— anything reading `isAnchored` on its own would end a run the moment a hand covered the card,
+which is exactly the case the lock was written to survive. See [simulation.md](simulation.md).
+
+## People occlusion
+
+Without it, RealityKit draws every model over the camera image, so a hand passed in front of the
+coral is painted *behind* it — the model looks like a sticker on the lens rather than an object on
+the table. One frame semantic fixes the depth ordering:
+
+```swift
+if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) {
+    configuration.frameSemantics.insert(.personSegmentationWithDepth)
+}
+```
+
+ARKit segments people out of each camera frame and, with `…WithDepth`, estimates how far away
+each of those pixels is; RealityKit compares that against the depth of what it is drawing and
+mattes per pixel. A hand in front of the coral covers it, a hand behind it does not. `ARView`
+needs nothing switched on — the semantic alone is the whole integration.
+
+Two constraints worth knowing:
+
+- The check is not advice. Setting an unsupported frame semantic **throws**, so
+  `supportsFrameSemantics` is mandatory. It needs an A12 or later; older devices simply keep the
+  old always-in-front look.
+- It is per *person*, not per object. Hands and arms occlude; the card, the table, and a coffee
+  cup do not. Occluding against arbitrary geometry is a different feature (`sceneUnderstanding`
+  `.occlusion`, LiDAR only) and is not enabled here.
+
+Segmentation runs on the Neural Engine rather than the main thread, but it is not free — if the
+frame rate drops noticeably on an older supported device, this is the first thing to try turning
+off.
+
+**It interacts with the lock, and can be mistaken for it failing.** A hand laid flat over the card
+is between the camera and the model, so people occlusion correctly mattes the model out — the
+screen shows a hand, and nothing behind it. That is the same picture as the lock not working. Tell
+them apart by moving the hand *beside* the card rather than over it, with the card still hidden
+(a finger over the artwork is enough to lose tracking): the model should stay, frozen, with
+*Locked:* in the panel.
 
 All of this is per branch: one card losing tracking only stops writes to its own `pivot`, and the
 cards still tracked carry on untouched.
@@ -196,8 +294,8 @@ pose — RealityKit has already copied it there — so the handler reads its own
 let target = card.anchor.transformMatrix(relativeTo: nil)
 ```
 
-It walks the cards once per rendered frame, filtering the tracked ones and clearing the held pose
-of the rest. That loop is the whole cost of supporting several cards: a few matrix operations
+It walks the cards once per rendered frame, showing and filtering the tracked ones and hiding the
+rest. That loop is the whole cost of supporting several cards: a few matrix operations
 each, on entities RealityKit has already updated.
 
 `ARSessionDelegate` is still implemented, but only for `didFailWithError`.

@@ -16,7 +16,12 @@ In Xcode:
 1. Open `Assets.xcassets` and select **AR Resources**.
 2. Drag the card's image (PNG or JPG) into it.
 3. Name the entry after the model it should show. The app pairs image to `.usdz` by that exact
-   string: `postcard` draws `postcard.usdz`.
+   string: `Showcase_postcard` draws `Showcase_postcard.usdz`.
+
+   **The prefix picks the card's kind.** A name starting `Simulation` runs a minigame on that
+   card; anything else is a showcase card that only stands its model up to be looked at. Prefix
+   showcase cards `Showcase` for readability — the code only tests for `Simulation`. See
+   [simulation.md](simulation.md).
 4. In the Attributes Inspector, set the **physical size** of the printed card. For a standard A6
    postcard that is 148 × 105 mm. Xcode fills in the second dimension from the aspect ratio.
 
