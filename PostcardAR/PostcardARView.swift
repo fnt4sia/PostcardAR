@@ -89,6 +89,10 @@ final class ARStatus {
     /// failure to lock can be told apart from a failure to see the hand.
     var handInFrame = false
 
+    /// Whether a hand is in frame that Vision cannot read a pinch from — see
+    /// `PinchInteraction.handTooClose`. Drawn during `playing` only, by `ContentView`.
+    var handTooClose = false
+
     /// How many `.usdz` files have finished loading, out of one per reference image.
     var loadedModels = 0
     var totalImages = 0
@@ -389,6 +393,10 @@ extension PostcardARView {
             if status.handInFrame != handInFrame {
                 status.handInFrame = handInFrame
             }
+            let handTooClose = pinch.handTooClose
+            if status.handTooClose != handTooClose {
+                status.handTooClose = handTooClose
+            }
 
             updateGame(cardPresent: activeCardPresent, candidate: trackedSimulation)
             pinch.update()
@@ -401,12 +409,20 @@ extension PostcardARView {
         /// whatever is held once a run stops — since both are pinch-side bookkeeping, not this
         /// coordinator's concern.
         private func updateGame(cardPresent: Bool, candidate: String?) {
+            var present = cardPresent
+
             if activeSimulationCard == nil, let candidate {
                 activeSimulationCard = candidate
                 game.begin()
+                // `cardPresent` was worked out in the card loop above, back when no card was the
+                // active one — so it is `false` on this frame however plainly the card is in
+                // view. `candidate` is only ever set from a *tracked* card, so the card is there.
+                // Passing the stale `false` through would send the `instructions` phase this call
+                // just started straight back to `idle`, which now wipes a run whose card is gone.
+                present = true
             }
 
-            game.update(cardPresent: cardPresent)
+            game.update(cardPresent: present)
 
             // Wiped: the card stayed away past the grace period. Let go of it so the next scan —
             // this card or another — starts a run from zero rather than resuming this one.

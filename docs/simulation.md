@@ -48,30 +48,48 @@ once a rendered frame whether the card it belongs to is on screen, and it decide
 
 ```
   idle ──card seen──▶ instructions ──Start──▶ countdown ──▶ playing ──30s──▶ finished
-    ▲                                             │            │               │
-    │                              card gone, no hand in frame │               │
-    │                                             ▼            ▼          Play Again
-    └────────── 5 s elapsed ──────────────────── grace ◀────────┘               │
-                                                  │                             │
-                                                  └── card back ──▶ resume ◀────┘
-                                                      (same score, same clock)
+    ▲    ◀──card gone──┘               │            │            │              │
+    │      (nothing kept)              │            │            │              │
+    │                    card gone, no hand in frame │            │         Play Again
+    │                                  ▼            ▼            ▼              │
+    └────────── 5 s elapsed ────────── grace ◀───────┴────────────┘              │
+                                         │                                       │
+                                         └── card back ──▶ resume ◀──────────────┘
+                                             (same score, same clock)
 ```
 
-| Phase | Screen | Card needed |
-|---|---|---|
-| `idle` | nothing but the status panel | — |
-| `instructions` | dimmed panel, what to do, **Start** | no |
-| `countdown` | 3 · 2 · 1 | yes |
-| `playing` | score top left, clock top right, snails grabbable | yes |
-| `grace` | "point at the card again" and 5 · 4 · 3 · 2 · 1 | it is what is being waited for |
-| `finished` | *Time's up*, score, **Play Again** / **Close** | no |
+| Phase | Screen | Card needed | Losing it |
+|---|---|---|---|
+| `idle` | nothing but the status panel | — | — |
+| `instructions` | dimmed panel, what to do, **Start** | yes | straight to `idle`, no grace |
+| `countdown` | 3 · 2 · 1 | yes | `grace` |
+| `playing` | score top left, clock top right, snails grabbable | yes | `grace` |
+| `grace` | "point at the card again" and 5 · 4 · 3 · 2 · 1 | it is what is being waited for | — |
+| `finished` | *Time's up*, score, **Play Again** / **Close** | no | — |
 
-**Only `countdown` and `playing` need the card in view.** During the other four the player is
-reading the phone rather than aiming it — most obviously on the instructions screen, where taking
-the run away for lowering the handset to read would be its own bug. The result screen is the same:
-the score stays up until it is dismissed, however the phone is pointed.
+**`idle` and `finished` are the only phases the card can leave freely.** On the result screen the
+player is reading a score rather than aiming the phone, so it stays up until it is dismissed,
+however the handset is pointed.
+
+**`instructions` needs the card, but for the opposite reason to `countdown` and `playing`.** Those
+two have a score and a clock to protect, which is what `grace` is for. Instructions has neither —
+nothing has started — so there is nothing worth holding, and the panel goes away with the card
+rather than sitting over a camera that is no longer pointed at one. `update(cardPresent:now:)`
+calls `reset()` on it directly, with no grace period and no state carried over; the next card seen
+puts the instructions back from scratch.
+
+That makes one ordering detail load-bearing in `Coordinator.updateGame(cardPresent:candidate:)`.
+`cardPresent` is worked out in the card loop that runs *before* it, back when `activeSimulationCard`
+was still `nil` — so on the very frame a card claims the session it reads `false`, however plainly
+the card is in view. Passing that straight through would send the `instructions` phase `begin()`
+just started back to `idle` on the same frame, and the two would alternate forever. The claim
+branch therefore overrides it to `true`, which is sound because `candidate` is only ever set from a
+card that was *tracked* this frame.
 
 ## Losing the card mid-run
+
+This is about `countdown` and `playing` — a run that is under way. `instructions` losing its card
+is not a loss mid-run but a run that never started, and is handled above.
 
 Two different situations, told apart by the same `handInFrame` the occlusion lock runs on.
 

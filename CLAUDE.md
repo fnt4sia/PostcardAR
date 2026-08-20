@@ -235,14 +235,32 @@ without comparing, and this runs once a frame.
 ## Status
 
 `ARStatus` carries `detectedImages` (names tracked right now), `lockedImages` (models held on
-screen by the occlusion lock), `handInFrame`, `loadedModels` / `totalImages`, and `errors`. Errors
-are a list, not one string: with several models, a missing `.usdz` must not hide the next one.
-`report(_:)` drops repeats, because `didFailWithError` can fire on every frame and the panel is
-not a log.
+screen by the occlusion lock), `handInFrame`, `handTooClose`, `loadedModels` / `totalImages`, and
+`errors`. Errors are a list, not one string: with several models, a missing `.usdz` must not hide
+the next one. `report(_:)` drops repeats, because `didFailWithError` can fire on every frame and
+the panel is not a log.
 
 The lock's two fields are there to make a device-only behaviour observable: a model that vanishes
 tells you nothing on its own, while "hand seen, nothing locked" and "no hand seen" are different
 bugs. Keep them if the panel is reworked.
+
+`handTooClose` is not a debug field — it drives player-facing UI. A hand right against the lens
+crops out every joint the pinch needs, so nothing responds and nothing says why; while it holds,
+`ContentView` blurs the camera with *Move your hand back* during `playing`.
+
+It takes **two** conditions per sample: the hand is measurably close (longest visible finger
+segment ≥ 30% of viewport width) *and* that sample failed to produce a pinch. Closeness is measured
+rather than inferred, and that is the correction to make if it is ever rewritten: an earlier version
+used only "a hand was seen and no pinch could be read", which fires on every unreadable hand —
+including one far enough away for its fingertips to drop below `jointConfidenceMinimum`, and one
+that has already left frame, since `lastHandSeenTime` keeps reporting a hand for a full
+`handPresenceTimeout` afterwards so the occlusion lock can hold. Do not reuse the lock's clocks or
+its 0.1 confidence floor to drive UI; they are deliberately generous.
+
+Measure *finger segments*, never the span of the whole hand — the wrist and palm leave the frame
+first, so a whole-hand measure collapses exactly when the hand is closest. Hysteresis is
+one-directional (5 samples in, instant out), and a live grip is excluded, because the wrist/knuckle
+guard fails routinely mid-pinch and would otherwise blur every drag. See `docs/interaction.md`.
 
 ## Card kinds and the run
 
@@ -254,10 +272,18 @@ the card starts a `GameSession`.
 The run is a plain state machine in `GameSession.swift`, driven once per rendered frame from
 `onRenderFrame()` and drawn by `runOverlay` in `ContentView.swift`:
 `idle → instructions → countdown → playing → finished`, with `grace` hanging off `countdown` and
-`playing`. Only those two need the card in view; on the other four the player is reading the phone
-rather than aiming it.
+`playing`. `instructions`, `countdown` and `playing` need the card in view; `idle` and `finished`
+do not, since a player reading a score is not aiming the phone, and `grace` *is* the wait for the
+card.
 
-Losing the card mid-run splits exactly on the lock. Hand in frame: the model stays, the run does
+`instructions` needs it for the opposite reason to the other two: not because there is a run to
+protect but because there is not one yet, so losing the card there calls `reset()` outright — no
+grace, nothing carried over, the panel goes away with the card and the next card seen starts over.
+That makes an ordering detail load-bearing in `updateGame(cardPresent:candidate:)`: `cardPresent`
+was computed by the card loop before `activeSimulationCard` was claimed, so it reads `false` on the
+claiming frame and must be overridden to `true` there, or `begin()` and `reset()` alternate forever.
+
+Losing the card mid-*run* splits exactly on the lock. Hand in frame: the model stays, the run does
 not notice. No hand: the model hides and the run freezes for 5 s — score and clock held, the card
 returning inside that window resuming where it left, the window expiring wiping the run so the
 next scan starts from zero. The clock **pauses** rather than draining, because losing the card is

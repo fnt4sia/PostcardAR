@@ -227,6 +227,77 @@ can never be locked into view, is in "Tracking loss, and the occlusion lock" in
 Hands are also matted out of the render by ARKit's people occlusion, so a hand passed in front of
 a snail hides it instead of being painted over — see "People occlusion" in the same file.
 
+## "Move your hand back"
+
+The same two clocks answer a third question, and it is the one the player actually feels. Bring a
+hand right up to the lens and the palm fills the frame: the fingertips, wrist and knuckle all leave
+it, every guard in `sample()` rejects the sample, and **nothing happens**. No grab, no release, no
+ring, no error. From behind the phone that is indistinguishable from the app being broken.
+
+`handTooClose` names that state, and it takes **two** conditions, decided per sample:
+
+1. the hand is measurably close — one finger segment covers `handTooCloseSegmentFraction` (0.30) of
+   the viewport's width, and
+2. this sample failed to produce a pinch anyway.
+
+`ContentView` draws a `.ultraThinMaterial` blur and the line *Move your hand back* over the camera
+while it holds — during `playing` only, since that is the one phase where a pinch is supposed to do
+something, so the only one where failing to read one needs explaining. The HUD is stacked above the
+blur, not under it.
+
+### Why closeness is measured rather than inferred
+
+The first version had only condition 2, phrased over the clocks above: a hand seen at
+`handPresenceConfidence` while nothing had reached `evaluatePinch(ratio:at:)` for half a second.
+That reads as "an unreadable hand", and *unreadable has many causes that are not proximity*:
+
+- **A hand that has already left.** `lastHandSeenTime` keeps answering yes for a whole
+  `handPresenceTimeout` (1 s) after the hand is gone — on purpose, because the occlusion lock needs
+  that tail. Inheriting it meant the blur appeared over an empty frame every time a hand withdrew.
+- **A hand far away.** Small fingertips fall below `jointConfidenceMinimum`, the `anchorTip` guard
+  rejects the sample, and nothing distinguishes that from a palm against the lens.
+- **Phantom hands.** `handPresenceConfidence` is 0.1, deliberately loose so the lock is generous.
+  As the trigger for a full-screen blur it is far too generous.
+
+So the measurement is now real, and `handTooClose` is a stored property written once per sample —
+"is there a hand" is answered by *this* sample's observation rather than by a clock that has not
+run out yet.
+
+### The measurement
+
+`longestFingerSegment(of:screenPoint:)` walks `fingerJointChains` — adjacent joints along each
+finger, tip inward — and returns the longest pair whose ends both clear `jointConfidenceMinimum`,
+in screen points. Apparent length scales inversely with distance, so one number answers "how close".
+
+Three choices in that worth keeping:
+
+- **Segments, not the span of the whole hand.** A hand at the lens has its wrist and most of its
+  palm outside the frame, so any whole-hand measure collapses exactly when the hand is closest. Two
+  adjacent joints on one finger are still visible. The wrist is left out of the chains entirely for
+  the same reason — it is the first joint to go.
+- **The longest pair, not an average.** That close, only a couple of segments resolve at all, and
+  any one of them being huge settles the question; an average is dragged around by which joints
+  happened to resolve.
+- **Screen points, not `Joint.distance(to:)`.** That returns normalized units, where x and y are
+  scaled by different pixel counts, so a diagonal segment's length depends on its orientation. Fine
+  for `ratio`, which divides two such distances and cancels the distortion out — useless against an
+  absolute threshold.
+
+`nil` (no pair resolved) counts as *not* too close. It is a "cannot tell", and the warning should
+never appear without evidence.
+
+### Hysteresis, one way only
+
+`handTooCloseConfirmSamples` (5, a third of a second) consecutive too-close samples are needed
+before the warning appears; a single sample that is not too close clears it at once. Asymmetric on
+purpose — a warning that lingers after the hand has moved back is worse than one that takes an
+extra sample to show up.
+
+**Excluding a live grip is not optional.** The wrist/knuckle guard fails routinely during a genuine
+pinch — documented above as normal behaviour at close range, not as a fault — so without
+`held == nil, !pinchClosed` in the `tooClose` expression the screen would blur over the very drag
+it is complaining about, every time.
+
 ## Finding the snails
 
 ```swift

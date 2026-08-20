@@ -78,6 +78,8 @@ own model and its own printed size.
 | A card with no `.usdz` | Tracks fine, shows nothing, and the status panel names the missing file. |
 | No minigame on a card | It is a showcase card. Only a name starting `Simulation` runs one, and the `.usdz` needs the same prefix. |
 | The run restarted from zero | The card left frame with no hand in it for more than 5 seconds. Inside 5 seconds the score and clock are held; keeping a hand in frame holds the model indefinitely. |
+| The instructions screen vanished | The card left frame. That screen has no grace period — nothing has started yet, so there is nothing to hold. Point at the card again and it comes back from the start. |
+| The screen blurred, "Move your hand back" | Your hand is too close to the lens for the camera to make out your fingertips, so no pinch can be read. Pull back, or bring your whole hand into frame. |
 
 ## What it looks like inside
 

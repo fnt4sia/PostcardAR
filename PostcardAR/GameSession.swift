@@ -30,13 +30,18 @@ private let graceDuration: TimeInterval = 5
 /// loop drives it and SwiftUI draws it.
 @Observable
 final class GameSession {
-    /// Where the run is. The card only has to be on screen for `countdown` and `playing`: during
-    /// the other four the player is reading the phone rather than aiming it, and taking the run
-    /// away for lowering the handset would be its own bug.
+    /// Where the run is. `instructions`, `countdown` and `playing` need the card on screen;
+    /// `idle`, `grace` and `finished` do not — `grace` *is* the wait for the card to come back,
+    /// and on `finished` the player is reading a score rather than aiming the phone, so taking
+    /// the result away for lowering the handset would be its own bug.
+    ///
+    /// `instructions` needs it for the opposite reason to `countdown` and `playing`: not because
+    /// there is a run to protect, but because there is not one yet. See `update(cardPresent:now:)`.
     enum Phase {
         /// No run. A Simulation card coming into view starts one.
         case idle
-        /// Dimmed instructions, waiting on Start.
+        /// Dimmed instructions, waiting on Start. Needs the card: nothing has started, so the
+        /// card leaving wipes the screen instead of parking it.
         case instructions
         /// 3 · 2 · 1.
         case countdown
@@ -137,8 +142,16 @@ final class GameSession {
         lastUpdate = now
 
         switch phase {
-        case .idle, .instructions, .finished:
+        case .idle, .finished:
             break // Nothing running, and nothing that needs the card in view.
+
+        case .instructions:
+            // Straight back to `idle`, with no grace period — the opposite of what losing the
+            // card does further down. Grace exists to protect a score and a clock, and neither
+            // has started yet, so there is nothing to hold: the screen goes away with the card
+            // rather than sitting over a camera no longer pointed at one. The next card seen
+            // puts the instructions back up from scratch.
+            if !cardPresent { reset() }
 
         case .countdown:
             guard cardPresent else { enterGrace(); break }

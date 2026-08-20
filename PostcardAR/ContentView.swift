@@ -87,7 +87,11 @@ private struct ScannerScreen: View {
             }
 
         case .playing:
-            hud
+            ZStack {
+                if status.handTooClose { tooCloseNotice }
+                hud // above the blur, not under it — the score and clock stay readable.
+            }
+            .animation(.easeInOut(duration: 0.2), value: status.handTooClose)
 
         case .grace:
             dimmed {
@@ -145,6 +149,35 @@ private struct ScannerScreen: View {
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.6), radius: 4)
         .padding(.top, 8)
+    }
+
+    /// Blurs the camera and says why, while a hand is in frame that Vision cannot read a pinch
+    /// from — nearly always a hand held too close to the lens. See `PinchInteraction.handTooClose`.
+    ///
+    /// Only on `playing`, because that is the one phase where a pinch is meant to do something,
+    /// so it is the only one where failing to read a pinch needs explaining. A blur is the right
+    /// shape for it: the failure is that the camera cannot make the hand out, and the screen
+    /// going soft says that without a modal panel over a game the player is mid-way through.
+    private var tooCloseNotice: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .ignoresSafeArea()
+            .overlay {
+                VStack(spacing: 10) {
+                    Image(systemName: "hand.raised.slash")
+                        .font(.system(size: 44))
+                    Text("Move your hand back")
+                        .font(.title3.weight(.semibold))
+                    Text("Keep your whole hand in the camera's view.")
+                        .font(.footnote)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.6), radius: 4)
+                .padding(32)
+            }
+            .transition(.opacity)
     }
 
     /// Every full-screen run panel sits on the same dimmed backdrop.

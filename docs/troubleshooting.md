@@ -181,11 +181,31 @@ It is a showcase card. Only a reference image whose name starts `Simulation` run
 `.usdz` has to carry the same prefix or the model will not load at all. Check the name in the
 asset catalog — see [simulation.md](simulation.md).
 
-### The instructions or the result screen never goes away
+### The result screen never goes away
 
-Neither needs the card in view, by design: on both of them the player is reading the phone rather
-than aiming it, so losing tracking there does not wipe the run. **Start** and **Play Again** /
-**Close** are the only ways out. Only `countdown` and `playing` are card-dependent.
+It does not need the card in view, by design: the player is reading a score rather than aiming the
+phone, so losing tracking there does not wipe it. **Play Again** and **Close** are the only ways
+out.
+
+### The instructions screen vanished while I was reading it
+
+The card left the frame. `instructions` is card-dependent, and unlike `countdown` and `playing` it
+gets no grace period — nothing has started, so there is no score or clock worth holding, and the
+panel goes away with the card rather than sitting over a camera pointed at nothing. Point the phone
+back at the card and the instructions come up again from the start.
+
+A hand in frame still holds it for up to `handPresenceTimeout` (1 s), because the coordinator
+passes `cardPresent: visible` here as everywhere else — the occlusion lock counts. See "The run" in
+[simulation.md](simulation.md).
+
+### The instructions screen flickers on and off rapidly
+
+That is the `updateGame(cardPresent:candidate:)` ordering trap, and it means the override on the
+claiming frame has been removed. `cardPresent` is computed by the card loop *before*
+`activeSimulationCard` is claimed, so it is `false` on the frame `begin()` runs; passed through as
+`false`, the fresh `instructions` phase is `reset()` back to `idle` on that same frame, and
+`begin()`/`reset()` alternate forever. The claim branch must force it `true` — `candidate` is only
+ever set from a tracked card, so the card is provably there.
 
 ### The run restarted from zero when I looked away
 
@@ -201,6 +221,42 @@ card mid-run" in [simulation.md](simulation.md).
 
 The countdown needs the card in view and it is not. Point the phone back at the card; the run
 resumes into the countdown with its full 3 s.
+
+### The screen blurred and said "Move your hand back"
+
+Working as intended, and it is telling you why nothing was responding: your hand is close enough to
+the lens (roughly under 18 cm) that Vision cannot resolve the joints a pinch needs. Move it further
+from the phone.
+
+It appears only during `playing`, only after five consecutive samples agree, and never while a
+snail is held or the hand is closed.
+
+### "Move your hand back" appears when my hand is nowhere near the camera
+
+That is the failure mode the current implementation exists to avoid, so it means the closeness
+*measurement* has been dropped and the warning is back to inferring proximity from "a hand was seen
+and no pinch could be read". That fires on every hand it cannot read for any reason:
+
+- a hand **far away**, whose fingertips fall below `jointConfidenceMinimum`;
+- a hand that has **already left frame** — `lastHandSeenTime` keeps reporting one for a full
+  `handPresenceTimeout` (1 s) afterwards, on purpose, so the occlusion lock can hold;
+- a **phantom** hand at the lock's deliberately-loose `handPresenceConfidence` of 0.1.
+
+The fix is the `tooClose` term in `sample()`: `longestFingerSegment(of:screenPoint:)` against
+`handTooCloseSegmentFraction`. See "Why closeness is measured rather than inferred" in
+[interaction.md](interaction.md).
+
+### The warning lingers after I move my hand away
+
+The one-directional hysteresis has been made symmetric. `handTooCloseConfirmSamples` gates the way
+*in* only; `noteTooClose(false)` clears the flag on the first sample that is not too close,
+including the no-hand path. Anything that delays the clear will read as the warning sticking.
+
+### The screen blurs while I am dragging a snail
+
+The `held == nil, !pinchClosed` exclusion in the `tooClose` expression has been dropped. The
+wrist/knuckle guard fails routinely during a genuine grip — normal at close range, not a fault — so
+without that exclusion the blur lands on the very drag it is complaining about, every time.
 
 ### Pinching does nothing during the countdown or after time is up
 

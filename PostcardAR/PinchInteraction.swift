@@ -94,6 +94,30 @@ private let handPresenceConfidence: Float = 0.1
 /// out on a dropped sample or two is far more noticeable than a late release.
 private let handPresenceTimeout: TimeInterval = 1.0
 
+/// A hand counts as too close once one finger segment — knuckle to knuckle, or knuckle to tip —
+/// covers this fraction of the viewport's width. See `PinchInteraction.handTooClose`.
+///
+/// Lands around 18 cm from the lens on a portrait iPhone: a proximal phalanx is roughly 4.5 cm,
+/// and the aspect-fill crop leaves about 44° of horizontal field of view on screen, so the visible
+/// frame is some 15 cm across at that distance. **Lower** it to warn from further away.
+private let handTooCloseSegmentFraction: CGFloat = 0.30
+
+/// Consecutive too-close samples before the warning appears — a third of a second at
+/// `handPoseSampleInterval`. There is deliberately no matching delay on the way out: one sample
+/// that is not too close clears it immediately, so the warning cannot outlive its cause.
+private let handTooCloseConfirmSamples = 5
+
+/// Adjacent joints along each finger, tip inward. Only *neighbouring* pairs are ever measured, and
+/// the wrist is deliberately absent: it is the first thing to leave the frame as a hand approaches
+/// the lens, which is precisely when this measurement has to keep working.
+private let fingerJointChains: [[HumanHandPoseObservation.JointName]] = [
+    [.thumbTip, .thumbIP, .thumbMP],
+    [.indexTip, .indexDIP, .indexPIP, .indexMCP],
+    [.middleTip, .middleDIP, .middlePIP, .middleMCP],
+    [.ringTip, .ringDIP, .ringPIP, .ringMCP],
+    [.littleTip, .littleDIP, .littlePIP, .littleMCP],
+]
+
 /// Rotation to bring the **rear** camera's `capturedImage` upright, for Vision's orientation
 /// hint. (`ARWorldTrackingConfiguration` always uses the rear camera, no mirroring needed.)
 private extension CGImagePropertyOrientation {
@@ -277,6 +301,26 @@ final class PinchInteraction {
         held != nil || Date().timeIntervalSince(lastHandSeenTime) < handPresenceTimeout
     }
 
+    /// Whether a hand is close enough to the lens that Vision cannot read a pinch from it — the
+    /// state where nothing on screen responds and nothing says why, which is the whole reason it
+    /// is surfaced.
+    ///
+    /// Two conditions, and **both** are required: the hand has to be measurably close
+    /// (`handTooCloseSegmentFraction`, from a real on-screen size — see
+    /// `longestFingerSegment(of:screenPoint:)`), *and* this sample has to have failed to produce a
+    /// pinch. Closeness alone would nag through a hand that is close and working fine; unreadable
+    /// alone is what an earlier version used, and it fired on every hand it could not read for any
+    /// reason at all — one far enough away for the fingertips to fall below
+    /// `jointConfidenceMinimum`, or one that had already left the frame, since `lastHandSeenTime`
+    /// keeps saying "hand" for a whole `handPresenceTimeout` after the hand is gone.
+    ///
+    /// Written once per sample rather than derived from timestamps, so "no hand" is answered by
+    /// the absence of a hand in *this* sample instead of by a clock that has not run out yet.
+    private(set) var handTooClose = false
+
+    /// Consecutive samples that read as too close — see `handTooCloseConfirmSamples`.
+    private var tooCloseStreak = 0
+
     /// Wires up haptics against a live `ARView`. Call once, from `Coordinator.start(in:)`.
     func attach(to arView: ARView) {
         self.arView = arView
@@ -375,6 +419,50 @@ final class PinchInteraction {
         }
     }
 
+    /// Longest visible finger segment, in screen points — how the app measures a hand's distance
+    /// from the lens. `nil` when no two adjacent joints on any finger both resolved, which is a
+    /// "cannot tell", never a "too close".
+    ///
+    /// Apparent segment length scales inversely with distance, and measuring *segments* rather
+    /// than the span of the whole hand is what makes it survive the case it exists for: a hand
+    /// against the lens has its wrist and most of its palm outside the frame, so any whole-hand
+    /// measure collapses exactly when the hand is closest. Two adjacent joints on one finger are
+    /// still visible. The longest pair wins rather than an average, because with a hand that
+    /// close only a couple of segments resolve and any one of them being huge settles the question.
+    ///
+    /// Measured in screen points, not `Joint.distance(to:)`: that returns normalized units, where
+    /// x and y are scaled by different numbers of pixels, so a diagonal segment's length depends on
+    /// its orientation. Fine for `ratio`, which divides two such distances and cancels it out;
+    /// useless against an absolute threshold.
+    private func longestFingerSegment(of hand: HumanHandPoseObservation,
+                                      screenPoint: (NormalizedPoint) -> CGPoint) -> CGFloat? {
+        var longest: CGFloat?
+        for chain in fingerJointChains {
+            for (nearer, further) in zip(chain, chain.dropFirst()) {
+                guard let a = hand.joint(for: nearer), a.confidence > jointConfidenceMinimum,
+                      let b = hand.joint(for: further), b.confidence > jointConfidenceMinimum
+                else { continue }
+                let start = screenPoint(a.location), end = screenPoint(b.location)
+                let length = hypot(start.x - end.x, start.y - end.y)
+                if length > longest ?? 0 { longest = length }
+            }
+        }
+        return longest
+    }
+
+    /// Records one sample's verdict, with `handTooCloseConfirmSamples` of hysteresis on the way in
+    /// and none on the way out — a warning that lingered after the hand moved back, or vanished,
+    /// would be worse than one that took an extra sample to appear.
+    private func noteTooClose(_ tooClose: Bool) {
+        guard tooClose else {
+            tooCloseStreak = 0
+            handTooClose = false
+            return
+        }
+        tooCloseStreak += 1
+        if tooCloseStreak >= handTooCloseConfirmSamples { handTooClose = true }
+    }
+
     /// Samples the camera for a hand pinch, at most once every `handPoseSampleInterval`.
     /// Reads `session.currentFrame` from the render loop, same ARFrame-retention reason as
     /// the card pose filter in `PostcardARView.swift` — only `capturedImage` crosses into the
@@ -424,6 +512,10 @@ final class PinchInteraction {
                 pinchPoint = nil
                 pinchPointFilter = PinchPointFilter() // don't glide in from a stale position
                 pinchOpenStreak = 0
+                // No hand at all, so nothing can be too close. Asked of *this* sample, not of
+                // `lastHandSeenTime`, which deliberately keeps reporting a hand for a second after
+                // it leaves so the occlusion lock can hold — a tail this warning must not inherit.
+                noteTooClose(false)
                 if pinchClosed, Date().timeIntervalSince(lastPinchEvaluationTime) >= handPoseLossTimeout {
                     pinchClosed = false
                     releaseHeld()
@@ -447,6 +539,15 @@ final class PinchInteraction {
                 return CGPoint(x: originX + imagePoint.x * scale, y: originY + imagePoint.y * scale)
             }
 
+            // How close the hand actually is, for the bail-outs below — a real on-screen
+            // measurement, so a hand that simply cannot be read (too far for the tips to clear
+            // `jointConfidenceMinimum`, half out of frame) is not mistaken for one at the lens.
+            // A live grip never counts: the wrist/knuckle guard further down fails routinely
+            // during a genuine pinch, so this would otherwise fire on almost every drag.
+            let tooClose = held == nil && !pinchClosed
+                && (longestFingerSegment(of: hand, screenPoint: screenPoint) ?? 0)
+                    >= viewportSize.width * handTooCloseSegmentFraction
+
             // Raw joints, kept regardless of confidence — `ratio` below falls back to these
             // once *a* confident tip has vouched for the sample, same as the point does.
             let thumbJoint = hand.joint(for: .thumbTip)
@@ -463,6 +564,7 @@ final class PinchInteraction {
             guard let anchorTip = thumb ?? index else {
                 // Neither tip readable this sample. Hold the last point rather than erasing
                 // it — same dead-band idiom as the card pose filter.
+                noteTooClose(tooClose)
                 if pinchClosed, Date().timeIntervalSince(lastPinchEvaluationTime) >= handPoseLossTimeout {
                     pinchClosed = false
                     releaseHeld()
@@ -497,12 +599,20 @@ final class PinchInteraction {
             // routinely during a genuine grip (close-range wrist confidence), so a timeout
             // keyed to it fired mid-drag — tried, caused release-then-regrab looping. The
             // point above still tracking is itself evidence the hand hasn't gone anywhere.
-            else { return }
+            else {
+                noteTooClose(tooClose)
+                return
+            }
 
             let handScale = wrist.distance(to: knuckle)
-            guard handScale > 0 else { return }
+            guard handScale > 0 else {
+                noteTooClose(tooClose)
+                return
+            }
             let ratio = Float(thumbJoint.distance(to: indexJoint) / handScale)
 
+            // A pinch came out of this sample, so whatever the hand's distance, it is working.
+            noteTooClose(false)
             evaluatePinch(ratio: ratio, at: filtered)
         }
     }

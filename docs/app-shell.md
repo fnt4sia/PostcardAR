@@ -99,6 +99,7 @@ coordinator living outside the view hierarchy entirely, and read by the overlay.
 @Observable
 final class ARStatus {
     var detectedImages: [String] = []
+    var handTooClose = false
     var loadedModels = 0
     var totalImages = 0
     var errors: [String] = []
@@ -200,6 +201,14 @@ nothing shows the pinch point on screen anymore. See "Grab, drag, release" in
 the 3 · 2 · 1, the score-and-clock HUD, the grace countdown and the result screen. Everything but
 the HUD sits on the same dimmed backdrop; the HUD deliberately has none, because that is the one
 screen where the coral has to stay visible, so its text carries a shadow instead of a panel.
+
+The `playing` branch is the only one that stacks two things: `tooCloseNotice` under the HUD, drawn
+while `status.handTooClose` holds. It is a `.ultraThinMaterial` rectangle — a *material*, not
+`.blur()`, because the thing to blur is the camera feed rendered by `ARView` underneath, which a
+modifier on the overlay's own content could never reach. The HUD is stacked above it so the score
+and clock stay sharp, and the whole `ZStack` carries the `.animation(value:)` so the notice fades
+in and out rather than snapping. Why the state exists at all is in
+[interaction.md](interaction.md); the phase gate is in [simulation.md](simulation.md).
 
 ## Part 3 — Bridging to UIKit
 
