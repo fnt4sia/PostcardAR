@@ -2,21 +2,41 @@
 //  HomeView.swift
 //  PostcardAR
 //
-
+//  Reproduces the Figma "Home" screen (node 253:1487) — the start screen shown before the
+//  camera opens. Standalone: not wired into ContentView/ScannerScreen yet, no navigation,
+//  no state. All positions below are the frame-relative coordinates Figma reports for this
+//  node, kept 1:1 as points.
+//
+//  The card outline and the two corner grids are drawn from the exact SVGs Figma exports for
+//  those nodes (bundled in Assets.xcassets as HomeCardShape/HomeGridTop/HomeGridBottom),
+//  rather than reconstructed as native shapes — the card is a boolean subtract with a corner
+//  notch that overhangs its own bounding box, and the grids are dashed, gradient-faded lines.
+//  Both are exactly the kind of thing that's cheaper and more faithful to trace from the real
+//  asset than to re-derive from raw coordinates. See docs/figma-design-to-code's rule on
+//  reproducing icons/images from their exported asset rather than hand-authoring them.
+//
+//  Colors/fonts are DesignTokens.swift — shared with InstructionsPopup.
+//
 
 import SwiftUI
+
+/// The start screen: navy background, two faint corner grids, a notched card holding the
+/// title, subtitle, and "Scan a Card" button.
 struct HomeView: View {
-    private let fontsRegistered = HomeTokens.fontsRegistered
+    // Forces font registration before any Text below resolves its font — see DesignTokens.
+    private let fontsRegistered = DesignTokens.fontsRegistered
+
+    private let background = Color(hex: 0x081A49)
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
-                HomeTokens.background.ignoresSafeArea()
+                background.ignoresSafeArea()
 
                 Image("HomeGridTop")
                     .resizable()
                     .frame(width: 435.469, height: 435)
-                    .scaleEffect(x: -1, y: 1)
+                    .scaleEffect(x: -1, y: 1) // matches the layer's authored rotation in Figma
                     .offset(x: 105, y: -61)
 
                 Image("HomeGridBottom")
@@ -43,46 +63,20 @@ struct HomeView: View {
                 Text("SCI.\nMULATE")
                     .font(.custom("JetBrainsMono-Bold", size: 52.788))
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(HomeTokens.blackText)
+                    .foregroundStyle(DesignTokens.blackText)
                 Text("Welcome, scientists!\nGet your cards ready.")
                     .font(.custom("JetBrainsMono-Regular", size: 18))
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(HomeTokens.blackText)
+                    .foregroundStyle(DesignTokens.blackText)
             }
             Button("Scan a Card") {}
-                .font(.system(size: 18))
-                .foregroundStyle(HomeTokens.whiteText)
+                .font(.custom("InterVariable", size: 18))
+                .foregroundStyle(DesignTokens.whiteText)
                 .padding(.horizontal, 20)
                 .frame(height: 44)
-                .background(Capsule().fill(HomeTokens.secondaryBlue))
-                .overlay(Capsule().stroke(HomeTokens.buttonBorder, lineWidth: 1))
+                .background(Capsule().fill(DesignTokens.secondaryBlue))
+                .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
         }
-    }
-}
-
-private enum HomeTokens {
-    static let background = Color(hex: 0x081A49)
-    static let buttonBorder = Color(hex: 0xB7FBFF)
-    static let blackText = Color("BlackText")
-    static let whiteText = Color("WhiteText")
-    static let secondaryBlue = Color("SecondaryBlue")
-
-    static let fontsRegistered: Bool = {
-        for name in ["JetBrainsMono-Regular", "JetBrainsMono-Bold"] {
-            guard let url = Bundle.main.url(forResource: name, withExtension: "ttf") else { continue }
-            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
-        }
-        return true
-    }()
-}
-
-private extension Color {
-    init(hex: UInt32) {
-        self.init(
-            red: Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue: Double(hex & 0xFF) / 255
-        )
     }
 }
 
