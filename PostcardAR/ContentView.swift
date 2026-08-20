@@ -105,10 +105,7 @@ private struct ScannerScreen: View {
 
         case .countdown:
             dimmed {
-                Text("\(game.countdownNumber)")
-                    .font(.system(size: 140, weight: .bold, design: .rounded))
-                    .contentTransition(.numericText(countsDown: true))
-                    .animation(.snappy, value: game.countdownNumber)
+                CountdownCard(number: game.countdownNumber)
             }
 
         case .playing:
