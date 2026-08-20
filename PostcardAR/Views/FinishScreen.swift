@@ -12,8 +12,6 @@ struct FinishScreen: View {
     var buttonTitle: String = "Scan another card"
     var action: () -> Void = {}
 
-    private let fontsRegistered = DesignTokens.fontsRegistered
-
     private let cardSize = CGSize(width: 344, height: 439.018)
 
     var body: some View {

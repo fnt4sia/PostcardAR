@@ -8,7 +8,6 @@ import SwiftUI
 
 struct CountdownCard: View {
     var number: Int
-    private let fontsRegistered = DesignTokens.fontsRegistered
 
     private let cardSize = CGSize(width: 282.099, height: 360.018)
 

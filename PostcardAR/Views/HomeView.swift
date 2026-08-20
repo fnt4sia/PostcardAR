@@ -24,9 +24,6 @@ import SwiftUI
 struct HomeView: View {
     var action: () -> Void = {}
 
-    // Forces font registration before any Text below resolves its font — see DesignTokens.
-    private let fontsRegistered = DesignTokens.fontsRegistered
-
     private let background = Color(hex: 0x081A49)
 
     var body: some View {

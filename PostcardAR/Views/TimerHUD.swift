@@ -10,8 +10,6 @@ struct TimerHUD: View {
     var current: Int
     var total: Int
 
-    private let fontsRegistered = DesignTokens.fontsRegistered
-
     private let trackWidth: CGFloat = 244
     private let trackHeight: CGFloat = 23
 

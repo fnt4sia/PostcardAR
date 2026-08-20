@@ -13,7 +13,7 @@ enum DesignTokens {
     static let primaryBlue = Color("PrimaryBlue")
     static let buttonBorder = Color(hex: 0xB7FBFF)
     static let progressGradient = LinearGradient(
-        colors: [Color(hex: 0xB7FBFF), Color(hex: 0x00288D)],
+        colors: [buttonBorder, Color(hex: 0x00288D)],
         startPoint: .top, endPoint: .bottom
     )
 
