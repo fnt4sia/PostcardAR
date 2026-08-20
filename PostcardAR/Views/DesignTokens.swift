@@ -10,7 +10,12 @@ enum DesignTokens {
     static let whiteText = Color("WhiteText")
     static let blackText = Color("BlackText")
     static let secondaryBlue = Color("SecondaryBlue")
+    static let primaryBlue = Color("PrimaryBlue")
     static let buttonBorder = Color(hex: 0xB7FBFF)
+    static let progressGradient = LinearGradient(
+        colors: [Color(hex: 0xB7FBFF), Color(hex: 0x00288D)],
+        startPoint: .top, endPoint: .bottom
+    )
 
     static let fontsRegistered: Bool = {
         let names = ["JetBrainsMono-Regular", "JetBrainsMono-Bold", "Inter-Variable"]
