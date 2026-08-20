@@ -5,10 +5,10 @@
   },
   "resources" : [
     {
-      "filename" : "Simulation_coral_with_drupella.arreferenceimage"
+      "filename" : "Showcase_drupella.arreferenceimage"
     },
     {
-      "filename" : "Showcase_postcard.arreferenceimage"
+      "filename" : "Simulation_drupella.arreferenceimage"
     }
   ]
 }

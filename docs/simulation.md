@@ -5,7 +5,7 @@ A card is one of two kinds, and the kind is the front of its name:
 | Kind | Prefix | What it does |
 |---|---|---|
 | **Showcase** | anything else | Stands its model up to be looked at. Model appears while the card is tracked and hides when it is not. No lock, no pinch, no UI. |
-| **Simulation** | `Simulation` | A minigame runs on it. The occlusion lock may hold its model on screen under a hand, its `Drupella*` entities are grabbable, and detecting it starts a run. |
+| **Simulation** | `Simulation` | A minigame runs on it. The occlusion lock may hold its model on screen under a hand, its grabbable entities enter the pool, and detecting it starts a run. |
 
 ```swift
 private let simulationCardPrefix = "Simulation"
@@ -15,8 +15,8 @@ kind: name.hasPrefix(simulationCardPrefix) ? .simulation : .showcase
 
 The type travels in the name for the same reason the model does: adding a card stays two files
 and no code change, and nothing in the source names an individual card. It is the same idiom as
-the `Drupella` prefix that `PinchInteraction.collectSnails(from:)` matches on. `Showcase` as a
-prefix is a convention for readability only — the code tests for `Simulation` and treats
+the `Drupella` prefix that `PinchInteraction.collect(from:named:report:)` matches on. `Showcase` as
+a prefix is a convention for readability only — the code tests for `Simulation` and treats
 everything else as showcase, so an unprefixed card is a showcase card.
 
 Renaming a card to change its kind means renaming its `.usdz` too; the pairing is still by exact
@@ -29,7 +29,7 @@ Three things, and nothing else:
 | | Showcase | Simulation |
 |---|---|---|
 | Occlusion lock | never — hides the instant its card is lost | holds the model under a hand, per [tracking.md](tracking.md) |
-| `Drupella*` entities collected into the grabbable pool | no | yes |
+| Grabbable entities collected into the pool | no | yes |
 | Seeing the card starts a `GameSession` | no | yes |
 
 The lock is a simulation-only feature because of what it is *for*. It exists so that reaching into
@@ -38,8 +38,111 @@ ordinary way ARKit loses the card and the exact moment the player is grabbing a 
 card has nothing to reach for, so a hand passing over it has no reason to keep a model frozen in
 mid-air after the card has gone.
 
-Showcase models never enter `snails`, which is the whole implementation of "no pinch on a showcase
-card" — `attemptGrab(at:)` has nothing to find on one, with no extra test.
+Showcase models never enter `grabbables`, which is the whole implementation of "no pinch on a
+showcase card" — `attemptGrab(at:)` has nothing to find on one, with no extra test.
+
+Annotations are **not** on that list, and deliberately so: a model carrying `Annotation*` entities
+gets labels whatever kind of card it is on. See [annotations.md](annotations.md).
+
+## Which minigame — read from the model, not the name
+
+There are two, and a simulation card's `.usdz` says which one it is by what is inside it:
+
+| Model contains | Game | Grabbable | Target |
+|---|---|---|---|
+| `CoralPlantPoint*` | **PlantingCoral** | `SingleCoral*` | the plant points |
+| `Drupella*` (and no plant points) | **RemovingDrupella** | `Drupella*` | — |
+| neither | none — reported to the status panel | | |
+
+```swift
+enum Minigame {
+    case removingDrupella
+    case plantingCoral
+}
+```
+
+The alternative was a second naming rule stacked on the `Simulation` prefix —
+`Simulation_Planting_*` against `Simulation_Drupella_*`. Reading the contents instead keeps the
+promise that adding a card is dropping files and changing no code, and leaves one convention to
+remember instead of two that have to agree across the reference image *and* the `.usdz` name. It is
+also the same idiom the entity prefixes already use: the model declares what it holds by naming, and
+the source names no individual card.
+
+Plant points are checked first, so a planting model that also contains a stray `Drupella*` is still a
+planting model rather than being silently misread.
+
+**The game is recorded per grabbable piece, not once for the app.** The pool is shared across every
+loaded simulation model, and two cards running different games can be in frame together, so
+`releaseHeld()` asks the piece in hand what it is. That also means it never needs to know which card
+the current run belongs to.
+
+## PlantingCoral
+
+Corals are stacked beside a structure; pinch them onto its plant points.
+
+```
+        ▓ SingleCoral_05   ← only this one can be picked up
+        ▓ SingleCoral_04
+        ▓ SingleCoral_03
+  ╔═══════════╗ ▓ _02
+  ║ structure ║ ▓ _01
+  ║  ·  ·  ·  ║          · = CoralPlantPoint_01…03
+  ╚═══════════╝
+   └ the card ┘
+```
+
+**The pile is built by the app, not by the asset.** Whatever transform a `SingleCoral*` was authored
+with is discarded: `stack(_:in:structure:)` puts them off the structure's right-hand edge, climbing
+from its base, at offsets expressed as fractions of the structure's own size so they hold at any
+export scale. Author the corals wherever is convenient — they will be moved.
+
+Three details in that which are easy to get wrong:
+
+- **It is card-relative, not viewer-relative.** `+x` is across the printed card's width, so from the
+  far side of the card the pile is on your left.
+- **Each coral is re-parented onto the model root first**, preserving its world transform. Without
+  that, `coral.transform` means "within whatever group the artist nested it in", and a translation
+  written there lands somewhere else entirely once an ancestor carries an offset or a scale.
+  Preserving the world transform bakes any ancestor scale into the coral's own transform, so it still
+  looks exactly as authored and only its position is ours to overwrite.
+- **The structure is measured without the corals.** `structureBounds(of:)` skips `SingleCoral*`
+  subtrees, and the result is handed to `fit(_:named:bounds:)` as what to size and centre the model
+  by. Both halves matter: measuring with the corals at their authored positions would scale the model
+  by something meaningless, and measuring with the pile included would shrink the structure to make
+  room for a pile that is *supposed* to hang off the card. This is why `collect` runs **before**
+  `fit` — see `loadModels()`.
+
+**Only the top of the pile is grabbable.** `isOnTopOfItsStack(_:)` passes a coral only when no coral
+of its own model is both still in play and higher up. Snails have no `stackIndex` and always pass.
+
+**Releasing.** Close enough to a free plant point on its *own* structure (`plantSnapRadius`, more
+generous than the drupella `pinchSnapRadius` — putting a snail back is recovering from a mistake,
+landing a coral is the object of the game) and it snaps in and scores. Anything else glides back to
+its slot in the pile.
+
+A coral is never lost and never fades. The pile is finite, so a fumbled release must not be able to
+run the board out of corals, and a coral left floating wherever the hand happened to open would be
+both ugly and unreachable.
+
+A planted coral is **not** re-grabbable — a plant is committed, like a removed snail — so
+`unscored()` is a drupella-only affair.
+
+The coral takes the plant point's position and rotation but **keeps its own scale**. A plant point is
+a marker, and one authored as a cube shrunk to 10% carries that scale in its transform; adopting it
+wholesale would shrink the coral the moment it was planted.
+
+## RemovingDrupella
+
+Drupella snails are eating the coral; pinch them off. The original game, and the simpler one: the
+snails are grabbable exactly where they were authored, there is nowhere to put them, and a released
+snail fades out and stays out.
+
+It scores at the **grab**, not the release, because a grabbed snail always ends up removed — see
+"Scoring, and putting the snails back" below, including the one case that reverses it.
+
+Each snail's outline mesh ships as a flat sibling rather than a child and is re-parented under its
+snail at load time, or it would stay behind on the coral while the snail is dragged off. Details in
+"Finding the pieces" in [interaction.md](interaction.md).
 
 ## The run
 
@@ -130,7 +233,17 @@ them — the overlays read the whole-second properties (`secondsRemaining`, `cou
 `graceSecondsRemaining`), which are only written when the displayed value actually changes.
 `@Observable` notifies on every set without comparing, so both halves of that matter.
 
-## Scoring, and putting the snails back
+## Scoring, and putting the pieces back
+
+Both games score `+1` a piece and run on the same 30 s clock, but **they score at opposite ends of
+the gesture**, and that is forced by what a grab means in each:
+
+| | Scored at | Because |
+|---|---|---|
+| RemovingDrupella | the grab | a grabbed snail always ends up removed, so the grab commits it |
+| PlantingCoral | the plant | a grabbed coral may never reach a plant point, so the grab commits nothing |
+
+Everything else below is about the drupella case.
 
 Score is `+1` per drupella snail picked off, counted in `attemptGrab(at:)` rather than on release.
 A grabbed snail is committed the instant it is picked up — that is the moment the haptic fires —
@@ -156,13 +269,16 @@ A snap-back release fires its own haptic — `UINotificationFeedbackGenerator.no
 of event rather than a third shade of grab/release. See "Haptics" in
 [interaction.md](interaction.md).
 
-**Play Again needs the snails back**, which is why a released snail is hidden rather than deleted:
+**Play Again needs the pieces back**, which is why a released snail is hidden rather than deleted:
 
 ```swift
-private struct Snail {
+private struct Grabbable {
     let entity: Entity
-    let home: Transform   // local transform at load time
+    let game: Minigame
+    let model: Entity     // so a coral can only be planted on its own structure
+    let home: Transform   // snail: where it loaded. coral: the stack slot it was given.
     var removed = false
+    var stackIndex: Int?  // planting only; nil for a snail
 }
 ```
 
@@ -171,6 +287,11 @@ private struct Snail {
 `OpacityComponent`, re-enabling it and clearing `removed`. `home` is a *local* transform, so
 restoring it re-seats the snail on the coral wherever the coral currently is — dragging writes
 world-space positions into that same local transform, which is exactly what this undoes.
+
+`restoreAll()` also clears every `PlantPoint.filled`, or a second planting run would start with the
+structure already full. And `stackIndex` deliberately **survives** a plant: `removed` is what takes a
+coral out of the pile and out of `isOnTopOfItsStack(_:)`'s reckoning, so keeping the slot is what
+lets the pile be rebuilt exactly for the next run.
 
 Restoring is triggered by watching for a phase change, not from the buttons, because the buttons
 live in SwiftUI and the entities live in `PinchInteraction`. Watched there rather than in the

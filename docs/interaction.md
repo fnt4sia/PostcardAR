@@ -159,26 +159,42 @@ filtering has no such catch-up debt: `pinchPoint` is always exactly one filtered
 
 ## Grab, drag, release
 
+Both minigames share this. What a grab and a release *mean* differs, and where it does, the piece in
+hand is what decides — `Grabbable.game`, not any global mode. See
+"Which minigame" in [simulation.md](simulation.md).
+
 **Grab** (`attemptGrab(at:)`) is gated on `game.phase == .playing` — instructions, countdown,
 grace and the result screen all leave the model on camera, and pinching through any of them would
-otherwise score. Past that gate it is nearest-by-screen-position among `snails` within
+otherwise score. Past that gate it is nearest-by-screen-position among `grabbables` within
 `pinchPickRadius` points of the pinch point — not a `RealityKit` hit test, which needs collision
-shapes on every snail and would return whatever entity is topmost in the hierarchy rather than
-whichever one is visually closest to the pinch. The chosen snail's distance from the camera is
+shapes on every piece and would return whatever entity is topmost in the hierarchy rather than
+whichever one is visually closest to the pinch. The chosen piece's distance from the camera is
 recorded once, in `held`, and held fixed for the drag.
+
+`isOnTopOfItsStack(_:)` filters that list further for the planting game: a coral is offered only when
+no coral of its own model is both still in play and higher in the pile, so the player takes it apart
+from the top. A snail has no `stackIndex` and always passes.
 
 **Drag** (`updateDrag()`) runs every rendered frame — same idiom as `hold(_:)` for cards —
 and re-projects `pinchPoint` into a world-space ray via `arView.ray(through:)`, placing the
 snail at the fixed grab depth along that ray. Fixed depth means the snail tracks the screen
 point at constant distance, rather than sliding toward or away from the camera.
 
-**Release** (`releaseHeld()`) first checks whether this is actually a put-back: close enough to the
-snail's `home` slot (`pinchSnapRadius`) and the run still `.playing`. If so it glides home via
+**Release** (`releaseHeld()`) branches on the held piece's game, into `releaseSnail(_:)` or
+`releaseCoral(_:)`.
+
+*A snail* is first checked for being a put-back: close enough to its `home` slot
+(`pinchSnapRadius`) and the run still `.playing`. If so it glides home via
 `Entity.move(to:relativeTo:duration:)`, reverses the score, and clears `removed` — see "Scoring,
-and putting the snails back" in [simulation.md](simulation.md) for the full undo path. Otherwise
+and putting the pieces back" in [simulation.md](simulation.md) for the full undo path. Otherwise
 it moves the entity into `fading` rather than deleting it immediately: `updateFading()` steps
 its opacity down by `pinchFadeStep` each frame and **hides** it at zero — a plain per-frame loop
 rather than `AnimationResource`, since the render loop is already iterating every frame regardless.
+
+*A coral* looks instead for the nearest free plant point **belonging to its own model** within
+`plantSnapRadius`, and seats itself there — the point's position and rotation, its own scale.
+Missing means gliding back to its slot in the pile, still in play. A coral never fades and is never
+lost: the pile is finite, so a fumbled release must not be able to run a board out of corals.
 
 Hidden, not `removeFromParent()`: Play Again needs the same snails back on the same coral, and
 keeping them in the tree makes that a transform reset rather than a second load of a model already
@@ -298,38 +314,58 @@ pinch — documented above as normal behaviour at close range, not as a fault �
 `held == nil, !pinchClosed` in the `tooClose` expression the screen would blur over the very drag
 it is complaining about, every time.
 
-## Finding the snails
+## Finding the pieces
 
 ```swift
-private func findDrupella(in entity: Entity) -> [Entity] {
-    var found = entity.name.hasPrefix(drupellaPrefix) ? [entity] : []
+private func find(prefix: String, in entity: Entity) -> [Entity] {
+    var found = entity.name.hasPrefix(prefix) ? [entity] : []
     for child in entity.children {
-        found.append(contentsOf: findDrupella(in: child))
+        found.append(contentsOf: find(prefix: prefix, in: child))
     }
     return found
 }
 ```
 
-`collectSnails(from:)` walks the model with this, then splits the result on `outlineSuffix`
-(`"_Outline"`) rather than treating every match as grabbable. The source asset ships each snail's
-outline mesh as a flat *sibling* — `Drupella_01` and `Drupella_01_Outline` both sit directly under
-`root`, not one nested in the other — so left alone an outline would (a) be independently
-grabbable as its own "snail", and (b) stay behind on the coral when the real one is dragged off,
-since nothing connects their transforms. `collectSnails(from:)` re-parents each outline under its
-matching snail (`setParent(_:preservingWorldTransform:)`, so it doesn't jump on re-parenting) and
-only the non-outline matches go into `snails`. Once reparented, an outline moves for free — drag,
+One walk, reused for all four prefixes — `Drupella`, `CoralPlantPoint`, `SingleCoral`, and
+`Annotation` has its own copy in `Annotations.swift`.
+
+`collect(from:named:report:)` runs it first for `CoralPlantPoint` and, finding none, for `Drupella`,
+which is how a model declares which minigame it is — see [simulation.md](simulation.md).
+
+Called once per **simulation** model from `loadModels()` in `PostcardARView.swift`, **before**
+`fit(_:named:bounds:)` — the coordinator crossing into `PinchInteraction` is the one place model
+loading and pinch pickup actually touch, and the ordering matters because a planting model gets its
+corals rearranged here and hands back the bounds the model should then be sized by.
+
+Everything found is flattened into one `grabbables` array shared across every simulation card:
+pickup works on whichever piece is nearest the pinch, regardless of which card's model it came from.
+Plant points are matched back to their own model by identity, so a coral cannot be planted on a
+different card's structure.
+
+A showcase card's model is never handed to `collect(from:named:report:)` at all, which is the whole
+implementation of "no pinch on a showcase card": `attemptGrab(at:)` has nothing to find on one,
+with no extra test. See [simulation.md](simulation.md).
+
+### Snail outlines
+
+`collectDrupella(from:snails:)` splits its matches on `outlineSuffix` (`"_Outline"`) rather than
+treating every one as grabbable. The source asset ships each snail's outline mesh as a flat
+*sibling* — `Drupella_01` and `Drupella_01_Outline` both sit directly under `root`, not one nested
+in the other — so left alone an outline would (a) be independently grabbable as its own "snail", and
+(b) stay behind on the coral when the real one is dragged off, since nothing connects their
+transforms. Each outline is re-parented under its matching snail
+(`setParent(_:preservingWorldTransform:)`, so it doesn't jump on re-parenting) and only the
+non-outline matches go into `grabbables`. Once reparented, an outline moves for free — drag,
 snap-back, `restoreAll()` all write the snail's own transform, and RealityKit composes the child's
 world transform from it same as any other parent/child pair.
 
-Called once per **simulation** model, right after `fit(_:named:)` in
-`PostcardARView.swift`'s `loadModels()` — the coordinator crossing into `PinchInteraction` is the
-one place model loading and pinch pickup actually touch. Flattened into one `snails` array shared
-across every simulation card — pickup works on whichever snail is nearest the pinch, regardless of
-which card's model it came from.
+### Plant points are hidden, not disabled
 
-A showcase card's model is never handed to `collectSnails(from:)` at all, which is the whole
-implementation of "no pinch on a showcase card": `attemptGrab(at:)` has nothing to find on one,
-with no extra test. See [simulation.md](simulation.md).
+`hideGeometry(of:)` strips `ModelComponent` from a `CoralPlantPoint*` and its descendants, so a
+marker authored as a visible cube stops rendering while its transform stays live and keeps reporting
+where the slot is as the card moves. `isEnabled = false` would also work for a leaf marker but takes
+any nested geometry with it, and the same helper is shared with annotations, where a disabled entity
+would break the on-screen test outright — see [annotations.md](annotations.md).
 
 ## Haptics
 
@@ -366,6 +402,15 @@ was tried for exactly that and made things worse (see "Filtering" above for why:
 derivative's own responsiveness, and a laggy derivative estimate keeps the adaptive cutoff
 elevated for longer after real motion, not shorter). Leave it at the reference default; reach for
 `pinchMinCutoff` for rest jitter instead.
+
+The planting game's own constants sit alongside them, and are the ones to reach for once the model
+exists:
+
+| Constant | Does | Raise it to… |
+|---|---|---|
+| `plantSnapRadius` | how near a free plant point a coral must be let go of | make planting more forgiving, at the risk of a coral jumping to a slot you did not mean |
+| `coralStackGap` | gap between the structure's edge and the pile, as a fraction of the structure's width | push the pile further off the card |
+| `coralStackSpacing` | pile spacing, as a multiple of a coral's own height | separate the corals; below `1.0` they overlap |
 
 `handScaleJointConfidenceMinimum` trades `ratio` update reliability for how loosely a `ratio`
 sample can be trusted — lower it further if the ring/release still stalls at close range, raise

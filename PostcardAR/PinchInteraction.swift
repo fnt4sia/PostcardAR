@@ -7,7 +7,7 @@
 //  docs/interaction.md for the full mechanism.
 //
 //  `PostcardARView.Coordinator` owns one `PinchInteraction` and talks to it through five calls:
-//  `attach(to:)` once at start, `collectSnails(from:)` once per loaded simulation model,
+//  `attach(to:)` once at start, `collect(from:named:report:)` once per loaded simulation model,
 //  `update()` once a rendered frame, and `handInFrame` read once a rendered frame for the
 //  occlusion lock. Nothing here reaches back into the coordinator except through `game`.
 //
@@ -75,11 +75,31 @@ private let handPoseLossTimeout: TimeInterval = 0.3
 /// unrecoverable. ~133 ms at `handPoseSampleInterval`, under `handPoseLossTimeout`.
 private let pinchOpenConfirmSamples = 2
 
-/// Prefix marking a grabbable snail entity — see `collectSnails(from:)`.
+/// Prefix marking a grabbable snail entity — see `collect(from:named:report:)`.
 private let drupellaPrefix = "Drupella"
 
+/// Prefix marking a slot on the structure that a coral can be planted into. A model containing any
+/// of these *is* a planting card — see `collect(from:named:report:)`.
+private let plantPointPrefix = "CoralPlantPoint"
+
+/// Prefix marking a coral that can be picked up and planted.
+private let singleCoralPrefix = "SingleCoral"
+
+/// How close, in metres, a coral has to be let go of to a free plant point to snap into it.
+/// Deliberately more generous than `pinchSnapRadius`: dropping a snail back on the coral is a
+/// recovery from a mistake, while landing a coral on its slot is the goal of the whole game.
+private let plantSnapRadius: Float = 0.07
+
+/// Gap between the structure's right edge and the coral pile, as a fraction of the structure's own
+/// width. The pile sits outside the structure, and so usually off the printed card as well.
+private let coralStackGap: Float = 0.08
+
+/// Vertical spacing in the pile, as a multiple of a coral's own height. Above 1.0 the corals sit
+/// clear of each other; below it they overlap.
+private let coralStackSpacing: Float = 1.05
+
 /// Suffix marking a snail's separate outline mesh. Shipped as a flat sibling of its snail in the
-/// source asset, not a child; `collectSnails(from:)` matches it to strip it out of the grabbable
+/// source asset, not a child; `collectDrupella(from:snails:)` matches it to strip it out of the grabbable
 /// pool and re-parent it under its snail instead.
 private let outlineSuffix = "_Outline"
 
@@ -205,21 +225,69 @@ struct PinchPointFilter {
 /// sampling, and the haptics. `PostcardARView.Coordinator` holds one and drives it
 /// per frame; see the file header for the full call surface.
 final class PinchInteraction {
-    /// One grabbable drupella snail.
-    private struct Snail {
-        let entity: Entity
+    /// Which minigame a grabbable piece belongs to, and therefore what picking it up and letting go
+    /// of it mean.
+    ///
+    /// Carried per piece rather than held once for the whole type, because the grabbable pool is
+    /// shared across every loaded simulation model and two cards running different games can be in
+    /// frame together. `releaseHeld()` then asks the piece in hand what it is, and never has to know
+    /// which card the run belongs to.
+    ///
+    /// Read from the model's *contents* in `collect(from:)` — a model with `CoralPlantPoint*`
+    /// entities plays the planting game, one with `Drupella*` plays the removal game. Nothing in the
+    /// source names a card, and no second naming rule sits on top of the `Simulation` prefix.
+    enum Minigame {
+        /// Drupella are eating the coral: pinch them off. Scored at the grab, since a grabbed snail
+        /// always ends up removed.
+        case removingDrupella
 
-        /// Its local transform when the model loaded, so Play Again — and a snap-back release —
-        /// can put it back on the coral. A released snail is hidden rather than deleted precisely
-        /// so this works.
-        let home: Transform
-
-        /// Already picked off. Not grabbable, and hidden once its fade finishes.
-        var removed = false
+        /// Corals are stacked beside a structure: pinch them onto its plant points. Scored at the
+        /// *plant*, since a grabbed coral may well not end up planted.
+        case plantingCoral
     }
 
-    /// The run. Read for phase gating (grab, snap-back) and written to for scoring —
-    /// `scored()` on grab, `unscored()` on a snap-back release.
+    /// One grabbable piece — a drupella snail, or a coral waiting to be planted.
+    private struct Grabbable {
+        let entity: Entity
+
+        /// What game it belongs to, and so what letting go of it does.
+        let game: Minigame
+
+        /// The model it came from. Plant points are matched against this, so a coral can only be
+        /// planted on its own structure and not on another card's.
+        let model: Entity
+
+        /// The local transform it returns to: for a snail, where it loaded on the coral, so a
+        /// snap-back release and Play Again can re-seat it; for a coral, the stack slot
+        /// `stack(_:in:)` assigned it, so a release nowhere near a plant point puts it back.
+        /// Released pieces are hidden rather than deleted precisely so this works.
+        let home: Transform
+
+        /// Out of play — a snail picked off, or a coral planted. Not grabbable either way.
+        var removed = false
+
+        /// Position in the stack beside the structure, counting up from the bottom; `nil` for a
+        /// snail, which is not stacked. Only the highest un-planted slot is grabbable, which is
+        /// what makes the player take the pile apart from the top.
+        var stackIndex: Int?
+    }
+
+    /// One place on the structure a coral can be planted.
+    private struct PlantPoint {
+        /// The `CoralPlantPoint*` entity. Its geometry is stripped at load time but its transform is
+        /// live, so it keeps reporting where the slot is as the card moves.
+        let entity: Entity
+
+        /// The model it belongs to, matched against `Grabbable.model`.
+        let model: Entity
+
+        /// Taken by a coral. A planted coral is not re-grabbable, so this never goes back to `false`
+        /// except in `restoreAll()`.
+        var filled = false
+    }
+
+    /// The run. Read for phase gating (grab, snap) and written to for scoring — `scored()` at the
+    /// grab for drupella and at the plant for corals, `unscored()` on a drupella snap-back.
     private let game: GameSession
 
     /// `game.phase` as of the previous call to `update()`. A fresh run needs its picked-off
@@ -230,16 +298,20 @@ final class PinchInteraction {
     /// For projecting/raycasting and reading `session.currentFrame`.
     private weak var arView: ARView?
 
-    /// Every `Drupella*` entity across every loaded *simulation* model, flattened. Showcase
-    /// models are never collected, which is the whole of "no pinch on a showcase card".
-    private var snails: [Snail] = []
+    /// Every grabbable piece across every loaded *simulation* model, flattened. Showcase models are
+    /// never collected, which is the whole of "no pinch on a showcase card".
+    private var grabbables: [Grabbable] = []
 
-    /// The snail being dragged — its index into `snails` (so release can reach its `home` and
+    /// Every plant point across every loaded planting model. Empty when no such card is loaded.
+    private var plantPoints: [PlantPoint] = []
+
+    /// The piece being dragged — its index into `grabbables` (so release can reach its `home` and
     /// flip `removed`) — and the camera distance it was grabbed at (held constant for the drag).
     /// `nil` also gates pickup to one at a time.
     private var held: (index: Int, depth: Float)?
 
-    /// Released snails, fading toward `opacity == 0` before being hidden.
+    /// Released snails, fading toward `opacity == 0` before being hidden. Corals never fade: an
+    /// unplanted one glides back to its stack slot instead of leaving play.
     private var fading: [(entity: Entity, opacity: Float)] = []
 
     /// Reused across samples rather than rebuilt each time.
@@ -328,11 +400,46 @@ final class PinchInteraction {
         snapHaptics = UINotificationFeedbackGenerator(view: arView)
     }
 
-    /// Finds every entity named `Drupella*` in a loaded model and adds them to the grabbable
-    /// pool. Call once per loaded *simulation* model — a showcase model's snails should never be
-    /// collected, which is the whole implementation of "no pinch on a showcase card".
-    func collectSnails(from model: Entity) {
-        let (outlines, grabbable) = findDrupella(in: model).reduce(into: ([Entity](), [Entity]())) { result, entity in
+    /// Reads a loaded *simulation* model and adds whatever it can be played with to the pool. Call
+    /// once per simulation model — a showcase model is never collected, which is the whole
+    /// implementation of "no pinch on a showcase card".
+    ///
+    /// **The model decides which minigame it is**, by what it contains: `CoralPlantPoint*` entities
+    /// mean planting, `Drupella*` mean removal. That keeps adding a card to dropping two files with
+    /// no code change and no second naming rule layered on the `Simulation` prefix — and it is the
+    /// same idiom the prefixes themselves use. A model with neither is reported rather than silently
+    /// standing there doing nothing.
+    /// - Returns: the bounds `fit(_:named:bounds:)` should size and centre the model by, when that
+    ///   is not simply the whole model. A planting model returns its *structure* alone, because the
+    ///   coral pile is deliberately parked outside the card and must not drag the structure off
+    ///   centre or shrink it to make room. `nil` means "measure the whole thing", as before.
+    ///
+    ///   This is also why the coordinator calls this **before** `fit`: the corals have to be moved
+    ///   into the pile first, or the bounds handed back describe an arrangement that no longer
+    ///   exists by the time anything is scaled.
+    @discardableResult
+    func collect(from model: Entity, named name: String, report: (String) -> Void) -> BoundingBox? {
+        let points = find(prefix: plantPointPrefix, in: model)
+        if !points.isEmpty {
+            return collectPlanting(from: model, named: name, points: points, report: report)
+        }
+
+        let snails = find(prefix: drupellaPrefix, in: model)
+        if !snails.isEmpty {
+            collectDrupella(from: model, snails: snails)
+            return nil
+        }
+
+        report("""
+            \(name).usdz is a Simulation card but has no \(plantPointPrefix)* or \(drupellaPrefix)* \
+            entities, so there is nothing to play with on it.
+            """)
+        return nil
+    }
+
+    /// The removal game: every `Drupella*` becomes grabbable where it sits on the coral.
+    private func collectDrupella(from model: Entity, snails: [Entity]) {
+        let (outlines, pickable) = snails.reduce(into: ([Entity](), [Entity]())) { result, entity in
             if entity.name.hasSuffix(outlineSuffix) {
                 result.0.append(entity)
             } else {
@@ -345,19 +452,132 @@ final class PinchInteraction {
         // (preserving its current world position, so it doesn't jump) makes it follow the drag.
         for outline in outlines {
             let snailName = String(outline.name.dropLast(outlineSuffix.count))
-            guard let snail = grabbable.first(where: { $0.name == snailName }) else { continue }
+            guard let snail = pickable.first(where: { $0.name == snailName }) else { continue }
             outline.setParent(snail, preservingWorldTransform: true)
         }
 
-        snails.append(contentsOf: grabbable.map { Snail(entity: $0, home: $0.transform) })
+        grabbables.append(contentsOf: pickable.map {
+            Grabbable(entity: $0, game: .removingDrupella, model: model, home: $0.transform)
+        })
     }
 
-    private func findDrupella(in entity: Entity) -> [Entity] {
-        var found = entity.name.hasPrefix(drupellaPrefix) ? [entity] : []
+    /// The planting game: the plant points are registered and hidden, and every `SingleCoral*` is
+    /// moved out of wherever it was authored and into a stack beside the structure.
+    private func collectPlanting(from model: Entity, named name: String,
+                                 points: [Entity], report: (String) -> Void) -> BoundingBox? {
+        // Sorted by name so `SingleCoral_01 … _05` stack in a predictable order rather than in
+        // whatever order the exporter happened to write them.
+        let corals = find(prefix: singleCoralPrefix, in: model).sorted { $0.name < $1.name }
+
+        guard !corals.isEmpty else {
+            report("\(name).usdz has plant points but no \(singleCoralPrefix)* corals to plant.")
+            return nil
+        }
+        if corals.count < points.count {
+            report("""
+                \(name).usdz has \(corals.count) \(singleCoralPrefix)* for \(points.count) \
+                \(plantPointPrefix)*, so \(points.count - corals.count) can never be filled.
+                """)
+        }
+
+        for point in points {
+            // A plant point marks a place, and should not be seen doing it. Its geometry is
+            // stripped rather than the entity disabled, so a marker authored as a visible cube
+            // vanishes while its transform — the thing actually wanted — stays live.
+            hideGeometry(of: point)
+            plantPoints.append(PlantPoint(entity: point, model: model))
+        }
+
+        let structure = structureBounds(of: model)
+        for (index, slot) in stack(corals, in: model, structure: structure).enumerated() {
+            grabbables.append(Grabbable(entity: corals[index], game: .plantingCoral, model: model,
+                                        home: slot, stackIndex: index))
+        }
+        return structure
+    }
+
+    /// Bounds of everything in the model that is *not* a coral, in the model's own space.
+    ///
+    /// The corals cannot be part of this. They are about to be moved into a stack of our choosing,
+    /// so wherever the artist happened to leave them is meaningless — and including them would feed
+    /// that meaningless position into both the stack's own offset and `fit(_:named:bounds:)`'s idea
+    /// of how wide the card's model is. A model authored with its corals in a heap a metre away
+    /// would come out scaled to a fraction of its intended size, for no visible reason.
+    private func structureBounds(of model: Entity) -> BoundingBox {
+        var bounds: BoundingBox?
+        func walk(_ entity: Entity) {
+            // Skip the whole subtree: a coral's children move with it.
+            guard !entity.name.hasPrefix(singleCoralPrefix) else { return }
+            if entity.components.has(ModelComponent.self) {
+                let own = entity.visualBounds(recursive: false, relativeTo: model)
+                bounds = bounds.map { $0.union(own) } ?? own
+            }
+            for child in entity.children { walk(child) }
+        }
+        walk(model)
+        return bounds ?? model.visualBounds(relativeTo: model)
+    }
+
+    /// Builds the pile of corals beside the structure, and returns each one's slot.
+    ///
+    /// The transform each coral was authored with is deliberately discarded: the pile is the app's,
+    /// not the asset's, so wherever they were modelled makes no difference to where they end up.
+    /// They go off the structure's right-hand edge — `+x`, which the anchor maps across the card's
+    /// width, making this **card-relative**: viewed from the far side of the card the pile is on
+    /// your left. They climb in `+y` from the structure's base, lowest index at the bottom, so the
+    /// last one is the top of the pile and the first one taken.
+    ///
+    /// Offsets are fractions of the structure's own size rather than absolute metres, so they hold
+    /// whatever scale the model was exported at.
+    ///
+    /// Each coral is re-parented onto the model root first, preserving its world transform. Without
+    /// that, `coral.transform` means "in whatever group the artist nested it in" — a translation
+    /// written there lands somewhere else entirely once an ancestor carries its own offset or scale.
+    /// Preserving the world transform keeps the coral looking exactly as authored, baking any
+    /// ancestor scale into its own transform, and leaves only its position for us to overwrite.
+    private func stack(_ corals: [Entity], in model: Entity, structure: BoundingBox) -> [Transform] {
+        var slots: [Transform] = []
+        var height = structure.min.y
+
+        for coral in corals {
+            coral.setParent(model, preservingWorldTransform: true)
+
+            let bounds = coral.visualBounds(relativeTo: model)
+            // A `.usdz` origin is wherever the artist left it — rarely the centre of the mesh — so
+            // the slot is worked out for the coral's *visible* box and then converted back to an
+            // origin position, the same correction `fit(_:named:bounds:)` makes for the model.
+            let originToCentre = bounds.center - coral.transform.translation
+            let step = bounds.extents.y * coralStackSpacing
+
+            let centre = SIMD3<Float>(
+                structure.max.x + structure.extents.x * coralStackGap + bounds.extents.x / 2,
+                height + bounds.extents.y / 2,
+                structure.center.z
+            )
+            height += step
+
+            var slot = coral.transform
+            slot.translation = centre - originToCentre
+            coral.transform = slot
+            slots.append(slot)
+        }
+        return slots
+    }
+
+    private func find(prefix: String, in entity: Entity) -> [Entity] {
+        var found = entity.name.hasPrefix(prefix) ? [entity] : []
         for child in entity.children {
-            found.append(contentsOf: findDrupella(in: child))
+            found.append(contentsOf: find(prefix: prefix, in: child))
         }
         return found
+    }
+
+    /// Removes the mesh from an entity and everything under it, leaving the transform alone.
+    private func hideGeometry(of entity: Entity) {
+        entity.components.remove(ModelComponent.self)
+        for child in entity.children {
+            hideGeometry(of: child)
+        }
     }
 
     /// One rendered frame's worth of pinch handling. Reacts to `game.phase` on its own — a run
@@ -393,12 +613,16 @@ final class PinchInteraction {
     private func restoreAll() {
         held = nil
         fading.removeAll()
-        for index in snails.indices {
-            let entity = snails[index].entity
-            entity.transform = snails[index].home
+        for index in grabbables.indices {
+            let entity = grabbables[index].entity
+            entity.transform = grabbables[index].home
             entity.components.remove(OpacityComponent.self)
             entity.isEnabled = true
-            snails[index].removed = false
+            grabbables[index].removed = false
+        }
+        // Empty the structure too, or a second planting run starts with every slot already taken.
+        for index in plantPoints.indices {
+            plantPoints[index].filled = false
         }
     }
 
@@ -657,12 +881,14 @@ final class PinchInteraction {
         else { return }
         let cameraPosition = cameraTransform.columns.3
 
-        let nearest = snails.indices
+        let nearest = grabbables.indices
             .compactMap { index -> (Int, CGFloat)? in
-                // A snail already picked off, or on a card that is not on screen, is not
-                // there to grab.
-                guard !snails[index].removed, snails[index].entity.isEnabledInHierarchy,
-                      let projected = arView.project(snails[index].entity.position(relativeTo: nil))
+                // Out of play, buried in the pile, or on a card that is not on screen: not there
+                // to grab.
+                guard !grabbables[index].removed,
+                      grabbables[index].entity.isEnabledInHierarchy,
+                      isOnTopOfItsStack(index),
+                      let projected = arView.project(grabbables[index].entity.position(relativeTo: nil))
                 else { return nil }
                 return (index, hypot(projected.x - point.x, projected.y - point.y))
             }
@@ -670,16 +896,35 @@ final class PinchInteraction {
             .min { $0.1 < $1.1 }
 
         guard let (index, _) = nearest else { return }
-        let snail = snails[index].entity
+        let piece = grabbables[index].entity
         let depth = simd_distance(SIMD3(cameraPosition.x, cameraPosition.y, cameraPosition.z),
-                                   snail.position(relativeTo: nil))
-        snails[index].removed = true
+                                   piece.position(relativeTo: nil))
+        grabbables[index].removed = true
         held = (index, depth)
-        // Scored at the grab, not the release: a grabbed snail always ends up removed, so
-        // this is the moment it is committed — and the moment the player feels the haptic.
-        // `releaseHeld()` can still undo both if it turns out to be a snap-back, not a pick.
-        game.scored()
         pinchHaptics?.impactOccurred()
+
+        // Removal scores at the grab, not the release: a grabbed snail always ends up removed, so
+        // this is the moment it is committed. `releaseHeld()` can still undo it if the release
+        // turns out to be a snap-back rather than a pick.
+        //
+        // Planting cannot do that. A grabbed coral is only a coral in hand — it scores when it
+        // actually lands on a plant point, which may never happen.
+        if grabbables[index].game == .removingDrupella {
+            game.scored()
+        }
+    }
+
+    /// Whether a piece is the top of the pile it belongs to, and so the next one that may be taken.
+    ///
+    /// Snails are not stacked and always pass. A coral passes only when no coral of its own model is
+    /// both still in play and higher up — which is what makes the player take the pile apart from
+    /// the top rather than pulling one out of the middle.
+    private func isOnTopOfItsStack(_ index: Int) -> Bool {
+        guard let stackIndex = grabbables[index].stackIndex else { return true }
+        let model = grabbables[index].model
+        return !grabbables.contains {
+            $0.model === model && !$0.removed && ($0.stackIndex ?? -1) > stackIndex
+        }
     }
 
     /// Moves the held snail to the last pinch point every rendered frame — same idiom as
@@ -689,7 +934,7 @@ final class PinchInteraction {
         guard let (index, depth) = held, let point = pinchPoint,
               let arView, let ray = arView.ray(through: point)
         else { return }
-        snails[index].entity.setPosition(ray.origin + ray.direction * depth, relativeTo: nil)
+        grabbables[index].entity.setPosition(ray.origin + ray.direction * depth, relativeTo: nil)
     }
 
     /// Lets go of the held snail. Close enough to its home slot, and the run hasn't ended out
@@ -701,23 +946,81 @@ final class PinchInteraction {
     private func releaseHeld() {
         guard let (index, _) = held else { return }
         held = nil
-        let entity = snails[index].entity
+
+        switch grabbables[index].game {
+        case .removingDrupella: releaseSnail(index)
+        case .plantingCoral: releaseCoral(index)
+        }
+    }
+
+    /// A snail let go of. Near enough its home slot, and with the run still live, that reads as
+    /// "put back" rather than "collected": it glides home, un-scores, and returns to play — the same
+    /// conditions `attemptGrab(at:)` needs for a grab, so an undo cannot outlive the run any more
+    /// than a pick can start after it. Otherwise it fades out and stays out.
+    private func releaseSnail(_ index: Int) {
+        let entity = grabbables[index].entity
 
         var snapping = false
         if game.phase == .playing, let parent = entity.parent {
-            let home = parent.convert(position: snails[index].home.translation, to: nil)
+            let home = parent.convert(position: grabbables[index].home.translation, to: nil)
             snapping = simd_distance(home, entity.position(relativeTo: nil)) < pinchSnapRadius
         }
 
         if snapping {
-            entity.move(to: snails[index].home, relativeTo: entity.parent, duration: pinchSnapDuration)
-            snails[index].removed = false
+            entity.move(to: grabbables[index].home, relativeTo: entity.parent,
+                        duration: pinchSnapDuration)
+            grabbables[index].removed = false
             game.unscored()
             snapHaptics?.notificationOccurred(.success)
         } else {
             fading.append((entity, 1))
             pinchHaptics?.impactOccurred(intensity: 0.4) // softer than the grab: this end is expected
         }
+    }
+
+    /// A coral let go of. Close enough to a free plant point on **its own** structure, and it snaps
+    /// in and scores; anything else glides back to its slot in the pile.
+    ///
+    /// A coral is never lost and never fades. There is no way to run a planting board out of corals
+    /// by fumbling, which matters because the pile is finite — and a coral left floating wherever
+    /// the hand happened to open would be both ugly and unreachable once the pile moved on.
+    private func releaseCoral(_ index: Int) {
+        let entity = grabbables[index].entity
+        let position = entity.position(relativeTo: nil)
+
+        let target = plantPoints.indices
+            .filter { !plantPoints[$0].filled && plantPoints[$0].model === grabbables[index].model }
+            .map { ($0, simd_distance(plantPoints[$0].entity.position(relativeTo: nil), position)) }
+            .filter { $0.1 < plantSnapRadius }
+            .min { $0.1 < $1.1 }
+
+        guard game.phase == .playing, let (point, _) = target else {
+            // Back to the pile, still in play and still the piece it was.
+            entity.move(to: grabbables[index].home, relativeTo: entity.parent,
+                        duration: pinchSnapDuration)
+            grabbables[index].removed = false
+            pinchHaptics?.impactOccurred(intensity: 0.4)
+            return
+        }
+
+        // The point's pose expressed where the coral actually lives, so the coral takes the slot's
+        // rotation as well as its position and sits the way the structure was authored to hold it.
+        //
+        // Position and rotation only — the coral keeps its own scale. A plant point is a marker,
+        // and a marker authored as, say, a cube shrunk to 10% carries that scale in its transform;
+        // adopting it wholesale would shrink the coral to a tenth the moment it was planted.
+        let slot = Transform(matrix: plantPoints[point].entity.transformMatrix(relativeTo: entity.parent))
+        let seated = Transform(scale: entity.transform.scale,
+                               rotation: slot.rotation,
+                               translation: slot.translation)
+        entity.move(to: seated, relativeTo: entity.parent, duration: pinchSnapDuration)
+
+        // `stackIndex` deliberately survives the plant. `removed` is already what takes the coral
+        // out of the pile and out of `isOnTopOfItsStack(_:)`'s reckoning, and keeping the slot is
+        // what lets `restoreAll()` rebuild the pile exactly for the next run.
+        plantPoints[point].filled = true
+        game.scored()
+        snapHaptics?.notificationOccurred(.success)
     }
 
     /// Steps every fading snail's opacity down and hides it at zero. Manual, not

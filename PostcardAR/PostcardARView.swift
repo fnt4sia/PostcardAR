@@ -42,7 +42,7 @@ private let resourceGroupName = "AR Resources"
 ///
 /// The type travels in the name for the same reason the model does: adding a card stays two
 /// files and no code change, and nothing here names an individual card. Same idiom as the
-/// `Drupella` prefix `PinchInteraction.collectSnails(from:)` matches on.
+/// `Drupella` prefix `PinchInteraction.collect(from:named:report:)` matches on.
 private let simulationCardPrefix = "Simulation"
 
 /// Each card's model, sized to a fixed on-screen width in metres — deliberately independent of
@@ -112,9 +112,10 @@ final class ARStatus {
 struct PostcardARView: UIViewRepresentable {
     let status: ARStatus
     let game: GameSession
+    let annotations: AnnotationLayer
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(status: status, game: game)
+        Coordinator(status: status, game: game, annotations: annotations)
     }
 
     func makeUIView(context: Context) -> ARView {
@@ -208,9 +209,17 @@ extension PostcardARView {
         /// coordinator and it.
         private let pinch: PinchInteraction
 
-        init(status: ARStatus, game: GameSession) {
+        /// The explanation labels on every loaded model, and where they land on screen. See
+        /// `Annotations.swift`.
+        private let annotations: AnnotationLayer
+
+        /// Held for `annotations.update(in:)`, which needs to project world points into the view.
+        private weak var arView: ARView?
+
+        init(status: ARStatus, game: GameSession, annotations: AnnotationLayer) {
             self.status = status
             self.game = game
+            self.annotations = annotations
             self.pinch = PinchInteraction(game: game)
         }
 
@@ -255,6 +264,7 @@ extension PostcardARView {
             arView.session.delegate = self // For errors only — see the note on the render loop.
             arView.session.run(configuration)
 
+            self.arView = arView
             pinch.attach(to: arView)
 
             // Fixed at the world origin and never rewritten — a static parent so pivots stay in
@@ -400,6 +410,7 @@ extension PostcardARView {
 
             updateGame(cardPresent: activeCardPresent, candidate: trackedSimulation)
             pinch.update()
+            if let arView { annotations.update(in: arView) }
         }
 
         // MARK: The run
@@ -499,14 +510,26 @@ extension PostcardARView {
                     do {
                         let model = try await Entity(named: card.name)
                         removeCameras(from: model)
-                        fit(model, named: card.name)
-                        card.pivot.addChild(model)
-                        // Showcase models are looked at, not touched, so their snails never enter
+
+                        // Before `fit`, not after. A planting model has its corals moved into a pile
+                        // beside the structure here, and hands back the structure's own bounds to be
+                        // sized by — measuring the model first would size it by wherever the corals
+                        // happened to be authored, and measuring it after would size it by the pile,
+                        // which is meant to hang off the card rather than fit on it.
+                        //
+                        // Showcase models are looked at, not touched, so nothing in one ever enters
                         // the grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to
-                        // find on one.
-                        if card.kind == .simulation {
-                            pinch.collectSnails(from: model)
-                        }
+                        // find on one. Which minigame a simulation card runs is read from the
+                        // model's own contents, not from its name; see `PinchInteraction.Minigame`.
+                        let bounds = card.kind == .simulation
+                            ? pinch.collect(from: model, named: card.name, report: report)
+                            : nil
+
+                        fit(model, named: card.name, bounds: bounds)
+                        card.pivot.addChild(model)
+                        // Any card's model may carry `Annotation*` entities; nothing about this
+                        // turns on the card's kind, so both kinds are offered to it.
+                        annotations.collect(from: model, named: card.name, report: report)
                         status.loadedModels += 1
                     } catch {
                         report("Could not load \(card.name).usdz: \(error.localizedDescription)")
@@ -539,8 +562,13 @@ extension PostcardARView {
         /// renders at whatever real-world size it was authored at — a number with no relation to
         /// either the card or the on-screen size actually wanted. Measuring at load time instead
         /// means any `.usdz` lands at exactly its target width regardless of authored scale.
-        private func fit(_ model: Entity, named name: String) {
-            let bounds = model.visualBounds(relativeTo: nil)
+        ///
+        /// - Parameter bounds: what to measure, when that is not the whole model. A planting card
+        ///   passes its structure alone, so that the pile of corals deliberately parked beside the
+        ///   card neither shrinks the structure to make room for itself nor pushes it off centre.
+        ///   Anything outside these bounds still renders — it is simply not what the fit is *for*.
+        private func fit(_ model: Entity, named name: String, bounds: BoundingBox? = nil) {
+            let bounds = bounds ?? model.visualBounds(relativeTo: nil)
             let targetWidth = modelWidths[name] ?? defaultModelWidth
 
             // Worth reporting rather than skipping quietly: a model authored in metres, left

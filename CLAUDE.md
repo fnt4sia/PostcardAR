@@ -13,11 +13,26 @@ one.
    model follows.
 5. **A card's name prefix decides its kind.** `Simulation*` runs a minigame on it; anything else
    is a *showcase* card that only stands its model up to be looked at. See `docs/simulation.md`.
-6. One gesture exists, on simulation cards only: pinch to pick up a `Drupella*` entity inside a
-   model and drag it — see `docs/interaction.md`. Nothing else on the model responds to touch.
+6. **Which minigame is decided by the model's contents, not its name** — `CoralPlantPoint*` inside
+   it means the planting game, `Drupella*` the removal game. See `docs/simulation.md`.
+7. One gesture exists, on simulation cards only: pinch to pick up a grabbable entity and drag it —
+   see `docs/interaction.md`. Nothing else on the model responds to touch.
+8. A model of either kind may carry `Annotation*` entities, which draw explanation labels from a
+   `.json` file of the same name as the card. See `docs/annotations.md`.
 
-Adding a card is two files — an image in the resource group and a `.usdz` of the same name —
-and no code change. Nothing in the source names an individual card.
+Adding a card is two files — an image in the resource group and a `.usdz` of the same name — and no
+code change; a third, `<name>.json`, if it has annotations. Nothing in the source names an
+individual card.
+
+**The naming conventions are the whole content API.** All prefix matches, all case-sensitive:
+
+| Name | Means |
+|---|---|
+| `Simulation*` (card) | runs a minigame; anything else is a showcase card |
+| `Annotation*` | a point to hang an explanation label on |
+| `Drupella*` | a grabbable snail; `*_Outline` is its outline mesh |
+| `CoralPlantPoint*` | a slot a coral can be planted into — and the marker that a model *is* the planting game |
+| `SingleCoral*` | a coral that can be picked up and planted |
 
 ## Stack
 
@@ -49,10 +64,12 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 |---|---|
 | `PostcardAR/ContentView.swift` | Start button, the camera screen's status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
-| `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — grabbable snails, drag/release, hand-pose sampling, haptics |
-| `PostcardAR/GameSession.swift` | The minigame's state machine and clocks — phases, score, the 30 s run, the 5 s grace |
+| `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — the grabbable pool, both minigames' grab/release rules, hand-pose sampling, haptics |
+| `PostcardAR/Annotations.swift` | Explanation labels: finding `Annotation*` entities, reading their JSON, projecting them to the screen |
+| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the 30 s run, the 5 s grace. Shared by both minigames |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
+| `PostcardAR/<image name>.json` | Annotation text for that card, if it has any — see `docs/annotations.md` |
 | `README.md` | What the project is, how to run it, how to add a card |
 | `docs/` | Design notes, one file per area |
 
@@ -66,7 +83,8 @@ Documentation is split by area, and each file owns its topic:
 | `docs/smoothing.md` | The dead band and glide filter, and its three constants |
 | `docs/app-shell.md` | SwiftUI, the `UIViewRepresentable` bridge, the status panel |
 | `docs/interaction.md` | Pinch pickup: Vision hand-pose sampling, grab/drag/release, tuning |
-| `docs/simulation.md` | Card kinds, the run's phases and clocks, losing the card mid-run, scoring |
+| `docs/simulation.md` | Card kinds, which minigame a model is, both games' rules, the run's phases and clocks, scoring |
+| `docs/annotations.md` | Explanation labels: the `Annotation*`/JSON pairing, and why they are drawn in screen space |
 | `docs/troubleshooting.md` | Symptom → cause, starting from the status panel |
 
 The Xcode target uses a synchronized folder group, so any file added under `PostcardAR/`
@@ -266,8 +284,21 @@ guard fails routinely mid-pinch and would otherwise blur every drag. See `docs/i
 
 A card's name prefix decides what it is: `Simulation*` runs a minigame, anything else is a
 showcase card. Three things and nothing else turn on that — whether the occlusion lock may hold
-the model, whether the model's `Drupella*` entities enter the grabbable pool, and whether seeing
-the card starts a `GameSession`.
+the model, whether the model's grabbable entities enter the pool, and whether seeing the card starts
+a `GameSession`. Annotations are deliberately not on that list: they key off entities and a JSON
+file, on either kind of card.
+
+**Which** minigame is a separate question, answered by the model's contents rather than its name:
+`CoralPlantPoint*` inside it means PlantingCoral, `Drupella*` means RemovingDrupella, neither is
+reported. That keeps "add a card = drop files, change no code" true and avoids a second naming rule
+that would have to agree across the reference image *and* the `.usdz`. The game is recorded per
+grabbable piece, not once for the app, because the pool is shared across cards and two cards running
+different games can be in frame together.
+
+Both games share `GameSession` unchanged — same phases, same 30 s clock, `+1` a piece — but they
+score at **opposite ends of the gesture**, and that is forced, not stylistic. Removal scores at the
+grab because a grabbed snail always ends up removed; planting scores at the plant because a grabbed
+coral may never reach a point. Full account in `docs/simulation.md`.
 
 The run is a plain state machine in `GameSession.swift`, driven once per rendered frame from
 `onRenderFrame()` and drawn by `runOverlay` in `ContentView.swift`:
@@ -296,14 +327,18 @@ in `docs/simulation.md`.
 
 ## Pinch pickup
 
-The one gesture, on simulation cards only: pinch to grab a `Drupella*` entity and drag it. Runs on
+The one gesture, on simulation cards only: pinch to grab a piece and drag it. Runs on
 Vision (`DetectHumanHandPoseRequest`), read from the same `capturedImage` ARKit is already
 tracking cards against, sampled at 15 Hz — independent of and slower than the 60 fps render loop,
 and guarded against overlapping inference. Grab is gated on `phase == .playing` and is then
-nearest-snail-by-screen-projection within `pinchPickRadius`, not a hit test; a held snail tracks
-the pinch point at fixed camera depth; release near its home slot snaps it back and un-scores it,
-otherwise it fades and hides for good. Full mechanism, including the open/close debounce and the
-Vision coordinate-space gotcha, in `docs/interaction.md`.
+nearest-piece-by-screen-projection within `pinchPickRadius`, not a hit test; a held piece tracks
+the pinch point at fixed camera depth. All of that is shared by both games.
+
+Release is where they part, on the held piece's own `Grabbable.game`. A **snail** near its home slot
+snaps back and un-scores, otherwise fades and hides for good. A **coral** near a free plant point on
+its own model seats itself there and scores, otherwise glides back to its slot in the pile — a coral
+never fades and is never lost, because the pile is finite. Full mechanism, including the open/close
+debounce and the Vision coordinate-space gotcha, in `docs/interaction.md`.
 
 ## Model scale
 
@@ -314,6 +349,13 @@ to `defaultModelWidth`) — see `fit(_:named:)`. Deliberately not derived from t
 printed width: that field is what ARKit tracks against, and coupling model size to it would mean
 two differently-sized cards could never carry equally-sized models. This keeps the model's
 authored scale irrelevant, and each card's on-screen size is one tunable number.
+
+`fit(_:named:bounds:)` takes an optional override for *what to measure*, and a planting model uses
+it to be sized by its structure alone. Its pile of corals is deliberately parked outside the card,
+and must neither shrink the structure to make room for itself nor drag it off centre. This is why
+`PinchInteraction.collect(from:named:report:)` runs **before** `fit` in `loadModels()`: it builds the
+pile and hands back the bounds to measure. Reversing that order sizes the model by wherever the
+corals happened to be authored, which is meaningless.
 
 ## Imported models carry a whole scene
 
