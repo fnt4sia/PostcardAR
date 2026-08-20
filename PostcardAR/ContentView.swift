@@ -14,6 +14,7 @@ struct ContentView: View {
         HomeView(action: { isScanning = true })
             .fullScreenCover(isPresented: $isScanning) {
                 ScannerScreen()
+                    .onDisappear { isScanning = false }
             }
     }
 }
@@ -34,16 +35,17 @@ private struct ScannerScreen: View {
         PostcardARView(status: status, game: game, annotations: annotations)
             .ignoresSafeArea()
             .overlay(alignment: .topLeading) { annotationLayer }
-            .overlay(alignment: .top) {
-                if showsStatusPanel { statusPanel }
-            }
-            .overlay(alignment: .bottom) {
-                // The result screen carries its own Close, so it does not need this one too.
-                if game.phase != .finished {
-                    Button("Close") { dismiss() }
-                        .buttonStyle(.borderedProminent)
-                        .padding()
+
+            .overlay(alignment: .topLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "x.circle.fill")
+                        .font(.system(size: 28))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .black.opacity(0.5))
                 }
+                .padding()
             }
             .overlay { runOverlay }
     }
@@ -98,10 +100,13 @@ private struct ScannerScreen: View {
             }
 
         case .playing:
-            ZStack {
+            ZStack(alignment: .top) {
                 if status.handTooClose { tooCloseNotice }
-                hud // above the blur, not under it — the score and clock stay readable.
+            
+                TimerHUD(secondsRemaining: game.secondsRemaining, current: game.score, total: 8)
+                    .padding(.top, 50)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .animation(.easeInOut(duration: 0.2), value: status.handTooClose)
 
         case .grace:
@@ -124,40 +129,15 @@ private struct ScannerScreen: View {
 
         case .finished:
             dimmed {
-                VStack(spacing: 16) {
-                    FinishScreen(
-                        label: "CLEARED",
-                        value: "\(game.score)",
-                        title: "DRUPELLA REMOVED",
-                        buttonTitle: "Play Again",
-                        action: { game.playAgain() }
-                    )
-                    Button("Close") { dismiss() }
-                }
+                FinishScreen(
+                    label: "CLEARED",
+                    value: "\(game.score)",
+                    title: "DRUPELLA REMOVED",
+                    buttonTitle: "Play Again",
+                    action: { game.playAgain() }
+                )
             }
         }
-    }
-
-    /// Score left, clock right. No backdrop — this is the one screen where the coral has to stay
-    /// visible, so the text carries a shadow instead of a panel.
-    private var hud: some View {
-        VStack {
-            HStack {
-                Label("\(game.score)", systemImage: "checkmark.seal.fill")
-                Spacer()
-                Label(String(format: "%02d", game.secondsRemaining), systemImage: "timer")
-                    .foregroundStyle(game.secondsRemaining <= 5 ? Color.red : .white)
-                    .contentTransition(.numericText(countsDown: true))
-            }
-            .font(.title2.weight(.bold).monospacedDigit())
-            .animation(.snappy, value: game.secondsRemaining)
-            .animation(.snappy, value: game.score)
-            .padding(.horizontal, 24)
-            Spacer()
-        }
-        .foregroundStyle(.white)
-        .shadow(color: .black.opacity(0.6), radius: 4)
-        .padding(.top, 8)
     }
 
     /// Blurs the camera and says why, while a hand is in frame that Vision cannot read a pinch
