@@ -10,7 +10,7 @@ The camera screen has a panel in the top corner:
 |---|---|
 | **Looking for a card…** / **Detected: `name`, `name`** | Which reference images ARKit is tracking *right now*, from `Entity.isAnchored`. A model can outlive its entry: a card lost while a hand is in frame stays locked on screen — see "Tracking loss, and the occlusion lock" in [tracking.md](tracking.md). |
 | **Locked: `name`** (yellow) | That card's model is on screen while ARKit is *not* tracking its card — the occlusion lock is holding it. Absent when nothing is locked. |
-| **Hand in frame** / **No hand** | Whether Vision currently sees a hand at all, which is what the lock runs on. Looser than the pinch crosshair: a hand can be present here and too poorly resolved to pinch with. |
+| **Hand in frame** / **No hand** | Whether Vision currently sees a hand at all, which is what the lock runs on. Looser than pinching: a hand can be present here and too poorly resolved for `evaluatePinch(ratio:at:)` to read a pinch off it. |
 | **Loading models (n/total)…** / **Models loaded (n)** | How many `.usdz` files have finished loading, one per reference image. |
 | Red text | An `ARSession` error, or a model that failed to load — named, one line each. |
 
@@ -110,9 +110,10 @@ still get painted over, and no setting here changes that. See "People occlusion"
 
 ### The screen fills with texture, or the app looks frozen while the camera still moves
 
-The camera is *inside* the model. A model authored in metres, left unscaled on a card a few
-centimetres wide, does exactly this. Normally `fit(_:toCardWidth:named:)` prevents it; if the
-measurement failed, a red line says so and names the card. Check that card's physical size field.
+The camera is *inside* the model. A model left unscaled — authored at some arbitrary real-world
+size — does exactly this. Normally `fit(_:named:)` prevents it by rescaling to that card's entry
+in `modelWidths`; if the measurement failed (a zero-size `targetWidth`, or a model whose
+`visualBounds` came back empty), a red line says so and names the card.
 
 ### The passthrough camera freezes completely, with no error
 
@@ -208,12 +209,11 @@ leaves the model on camera and pinching through them would score.
 
 ### Play Again starts a run with no snails left
 
-`restoreSnails()` did not run. A released snail is *hidden*, not removed from the entity tree,
-precisely so a second run can put it back — if `updateFadingSnails()` was changed back to
-`removeFromParent()`, or the phase-transition test in `updateGame(cardPresent:candidate:)` was
-loosened, this is what comes back. Note both halves of that test look at where the phase came
-*from*: resuming out of `grace` also lands in `countdown`, and that run's snails must **not** be
-restored.
+`restoreAll()` did not run. A released snail is *hidden*, not removed from the entity tree,
+precisely so a second run can put it back — if `updateFading()` was changed back to
+`removeFromParent()`, or the phase-transition test in `PinchInteraction.update()` was loosened,
+this is what comes back. Note both halves of that test look at where the phase came *from*:
+resuming out of `grace` also lands in `countdown`, and that run's snails must **not** be restored.
 
 ### It does not run on the simulator
 

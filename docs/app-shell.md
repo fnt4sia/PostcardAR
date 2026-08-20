@@ -105,10 +105,6 @@ final class ARStatus {
 }
 ```
 
-The pinch crosshair used to live here too (`pinchPoint`/`pinchProgress`), driving a SwiftUI
-overlay. It doesn't anymore — see [interaction.md](interaction.md) for why, and for where it
-lives instead.
-
 `@Observable` is a macro. At compile time it rewrites every stored property into a get/set pair
 that reports reads and writes to the Observation framework.
 
@@ -193,16 +189,12 @@ presented view, so the screen can close itself without knowing who presented it 
 binding back to it.
 
 `.overlay` stacks a view on top of another, aligned within its frame — the same idea as `ZStack`,
-but anchored to this specific view's bounds. There used to be a third overlay here for the pinch
-crosshair; it was removed on the theory that SwiftUI's overlay coordinate space didn't reliably
-agree, pixel for pixel, with `ARView.bounds` — the space the pinch point is actually computed in
-and the space `arView.ray(through:)` consumes it in. The crosshair is a plain
-`UIHostingController` view added directly as a subview of `arView` instead. That move alone
-didn't fully resolve the reported offset, so don't take the coordinate-space theory as
-confirmed — see "The crosshair" in [interaction.md](interaction.md) for the current state.
-but anchored to this specific view's bounds. A third overlay places the pinch crosshair at
-`status.pinchPoint` the same way — see [interaction.md](interaction.md) — and a fourth,
-unaligned so it fills the whole screen, carries the run's UI.
+but anchored to this specific view's bounds. A third, unaligned so it fills the whole screen,
+carries the run's UI.
+
+There used to be a pinch crosshair here too, drawn where the pinch point landed. It's gone —
+nothing shows the pinch point on screen anymore. See "Grab, drag, release" in
+[interaction.md](interaction.md) for what pinch pickup still does without it.
 
 `runOverlay` is a `@ViewBuilder` switch over `game.phase`, one branch each for the instructions,
 the 3 · 2 · 1, the score-and-clock HUD, the grace countdown and the result screen. Everything but

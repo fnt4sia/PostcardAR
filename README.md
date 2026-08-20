@@ -72,7 +72,7 @@ own model and its own printed size.
 | Trap | Short version |
 |---|---|
 | Image will not track | ARKit needs high-contrast detail spread across the *whole* image. Flat colour, gradients, white backgrounds, and AI-upscaled images fail. Xcode's asset warnings are the authority — see [docs/reference-images.md](docs/reference-images.md). |
-| Model is a strange size | It isn't: `fit(_:toCardWidth:named:)` sizes every model to its card's width, so the authored scale is irrelevant. Check the physical size field instead. |
+| Model is a strange size | It isn't authored scale: `fit(_:named:)` sizes every model to a fixed target width, so that's irrelevant. Tune that card's entry in `modelWidths` instead. |
 | Camera freezes, no error | The `.usdz` brought a camera from Blender. Stripped automatically at load; see [docs/models.md](docs/models.md). |
 | Everything stutters | Model weight. Budget 512² textures and under ~50k triangles, *shared* across all cards — every model loads at launch and stays resident. |
 | A card with no `.usdz` | Tracks fine, shows nothing, and the status panel names the missing file. |
@@ -152,6 +152,6 @@ Not implemented:
 - **Any minigame but the drupella one.** The rules live in `GameSession` and the scoring call in
   `attemptGrab(at:)`; a different game on a different simulation card would need those split per
   card rather than shared.
-- **Pinch gestures on anything but `SeaSnail*` entities** (scaling or spinning the model itself,
+- **Pinch gestures on anything but `Drupella*` entities** (scaling or spinning the model itself,
   say). If added, write to the model entity or a second pivot — never to the anchor, and not to
   the existing pivot, whose world transform is rewritten every frame.

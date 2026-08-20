@@ -47,14 +47,6 @@ private struct ScannerScreen: View {
                         .padding()
                 }
             }
-            .overlay(alignment: .topLeading) {
-                // Only while there is something to grab — the crosshair means "this is where the
-                // pinch lands", which is a lie on every other screen.
-                if game.phase == .playing, let point = status.pinchPoint {
-                    PinchCrosshair(progress: status.pinchProgress)
-                        .position(point)
-                }
-            }
             .overlay { runOverlay }
     }
 
@@ -220,30 +212,6 @@ private struct ScannerScreen: View {
     private func line(_ isDone: Bool, done: String, waiting: String, icon: String) -> some View {
         Label(isDone ? done : waiting, systemImage: isDone ? "checkmark.circle.fill" : icon)
             .foregroundStyle(isDone ? Color.green : .white)
-    }
-}
-
-/// Where the pinch is landing, and how closed it currently is. Not used from SwiftUI directly —
-/// `PostcardARView.Coordinator` hosts it as a plain subview of `arView` via `UIHostingController`
-/// (see `setUpCrosshair(in:)`), so it shares `arView`'s own coordinate space instead of going
-/// through a separate SwiftUI overlay that could disagree with it on where things land.
-struct PinchCrosshair: View {
-    let progress: Float
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(.white.opacity(0.4), lineWidth: 2)
-            Circle()
-                .trim(from: 0, to: CGFloat(progress))
-                .stroke(Color.green, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .rotationEffect(.degrees(-90)) // start the ring at 12 o'clock, fill clockwise
-            Circle()
-                .fill(.white)
-                .frame(width: 6, height: 6)
-        }
-        .frame(width: 44, height: 44)
-        .animation(.easeOut(duration: 0.1), value: progress)
     }
 }
 

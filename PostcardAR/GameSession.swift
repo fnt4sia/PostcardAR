@@ -106,6 +106,14 @@ final class GameSession {
         score += 1
     }
 
+    /// A grab turned out to be a snap-back — put down near its home slot, not carried off — so
+    /// the score `scored()` already counted is reversed. Same phase gate as `scored()`, so an
+    /// undo can't land after the run it belongs to has already ended.
+    func unscored() {
+        guard phase == .playing, score > 0 else { return }
+        score -= 1
+    }
+
     private func restart(into phase: Phase) {
         score = 0
         timeLeft = runDuration

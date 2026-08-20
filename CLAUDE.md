@@ -13,7 +13,7 @@ one.
    model follows.
 5. **A card's name prefix decides its kind.** `Simulation*` runs a minigame on it; anything else
    is a *showcase* card that only stands its model up to be looked at. See `docs/simulation.md`.
-6. One gesture exists, on simulation cards only: pinch to pick up a `SeaSnail*` entity inside a
+6. One gesture exists, on simulation cards only: pinch to pick up a `Drupella*` entity inside a
    model and drag it — see `docs/interaction.md`. Nothing else on the model responds to touch.
 
 Adding a card is two files — an image in the resource group and a `.usdz` of the same name —
@@ -48,7 +48,8 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 | Path | Purpose |
 |---|---|
 | `PostcardAR/ContentView.swift` | Start button, the camera screen's status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
-| `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, pinch pickup, and card kinds |
+| `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
+| `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — grabbable snails, drag/release, hand-pose sampling, haptics |
 | `PostcardAR/GameSession.swift` | The minigame's state machine and clocks — phases, score, the 30 s run, the 5 s grace |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
@@ -247,7 +248,7 @@ bugs. Keep them if the panel is reworked.
 
 A card's name prefix decides what it is: `Simulation*` runs a minigame, anything else is a
 showcase card. Three things and nothing else turn on that — whether the occlusion lock may hold
-the model, whether the model's `SeaSnail*` entities enter the grabbable pool, and whether seeing
+the model, whether the model's `Drupella*` entities enter the grabbable pool, and whether seeing
 the card starts a `GameSession`.
 
 The run is a plain state machine in `GameSession.swift`, driven once per rendered frame from
@@ -269,22 +270,24 @@ in `docs/simulation.md`.
 
 ## Pinch pickup
 
-The one gesture, on simulation cards only: pinch to grab a `SeaSnail*` entity and drag it. Runs on
-Vision
-(`DetectHumanHandPoseRequest`), read from the same `capturedImage` ARKit is already tracking
-cards against, sampled at 15 Hz — independent of and slower than the 60 fps render loop, and
-guarded against overlapping inference. Grab is gated on `phase == .playing` and is then
+The one gesture, on simulation cards only: pinch to grab a `Drupella*` entity and drag it. Runs on
+Vision (`DetectHumanHandPoseRequest`), read from the same `capturedImage` ARKit is already
+tracking cards against, sampled at 15 Hz — independent of and slower than the 60 fps render loop,
+and guarded against overlapping inference. Grab is gated on `phase == .playing` and is then
 nearest-snail-by-screen-projection within `pinchPickRadius`, not a hit test; a held snail tracks
-the pinch point at fixed camera depth; release fades it out and hides it. Full mechanism, including the open/close debounce and the Vision
-coordinate-space gotcha, in `docs/interaction.md`.
+the pinch point at fixed camera depth; release near its home slot snaps it back and un-scores it,
+otherwise it fades and hides for good. Full mechanism, including the open/close debounce and the
+Vision coordinate-space gotcha, in `docs/interaction.md`.
 
 ## Model scale
 
 Anchoring does not scale. A `.usdz` renders at whatever real-world size it was authored at,
-regardless of how big its card is. So each model is measured with `visualBounds` at load time
-and scaled to a fraction of **its own card's** `physicalSize.width` — see
-`fit(_:toCardWidth:named:)` and the `modelWidthRelativeToCard` constant. This keeps the model's
-authored scale irrelevant, and lets cards of different printed sizes each size their own model.
+regardless of how big its card is. So each model is measured with `visualBounds` at load time and
+scaled to a fixed target width in metres, looked up by card name in `modelWidths` (falling back
+to `defaultModelWidth`) — see `fit(_:named:)`. Deliberately not derived from the card's own
+printed width: that field is what ARKit tracks against, and coupling model size to it would mean
+two differently-sized cards could never carry equally-sized models. This keeps the model's
+authored scale irrelevant, and each card's on-screen size is one tunable number.
 
 ## Imported models carry a whole scene
 

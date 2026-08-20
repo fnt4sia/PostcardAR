@@ -5,7 +5,7 @@ A card is one of two kinds, and the kind is the front of its name:
 | Kind | Prefix | What it does |
 |---|---|---|
 | **Showcase** | anything else | Stands its model up to be looked at. Model appears while the card is tracked and hides when it is not. No lock, no pinch, no UI. |
-| **Simulation** | `Simulation` | A minigame runs on it. The occlusion lock may hold its model on screen under a hand, its `SeaSnail*` entities are grabbable, and detecting it starts a run. |
+| **Simulation** | `Simulation` | A minigame runs on it. The occlusion lock may hold its model on screen under a hand, its `Drupella*` entities are grabbable, and detecting it starts a run. |
 
 ```swift
 private let simulationCardPrefix = "Simulation"
@@ -15,9 +15,9 @@ kind: name.hasPrefix(simulationCardPrefix) ? .simulation : .showcase
 
 The type travels in the name for the same reason the model does: adding a card stays two files
 and no code change, and nothing in the source names an individual card. It is the same idiom as
-the `SeaSnail` prefix that `collectSnails(in:)` matches on. `Showcase` as a prefix is a convention
-for readability only — the code tests for `Simulation` and treats everything else as showcase, so
-an unprefixed card is a showcase card.
+the `Drupella` prefix that `PinchInteraction.collectSnails(from:)` matches on. `Showcase` as a
+prefix is a convention for readability only — the code tests for `Simulation` and treats
+everything else as showcase, so an unprefixed card is a showcase card.
 
 Renaming a card to change its kind means renaming its `.usdz` too; the pairing is still by exact
 name. See [reference-images.md](reference-images.md) and [models.md](models.md).
@@ -29,7 +29,7 @@ Three things, and nothing else:
 | | Showcase | Simulation |
 |---|---|---|
 | Occlusion lock | never — hides the instant its card is lost | holds the model under a hand, per [tracking.md](tracking.md) |
-| `SeaSnail*` entities collected into the grabbable pool | no | yes |
+| `Drupella*` entities collected into the grabbable pool | no | yes |
 | Seeing the card starts a `GameSession` | no | yes |
 
 The lock is a simulation-only feature because of what it is *for*. It exists so that reaching into
@@ -115,12 +115,28 @@ them — the overlays read the whole-second properties (`secondsRemaining`, `cou
 ## Scoring, and putting the snails back
 
 Score is `+1` per drupella snail picked off, counted in `attemptGrab(at:)` rather than on release.
-A grabbed snail always ends up removed — there is no putting one back — so the grab is the moment
-it is committed, it is the moment the haptic fires, and it avoids the awkward case of a snail still
-in hand when the buzzer goes.
+A grabbed snail is committed the instant it is picked up — that is the moment the haptic fires —
+which avoids the awkward case of a snail still in hand when the buzzer goes.
 
 Grabbing is gated on `phase == .playing`. Instructions, countdown, grace and the result screen all
 leave the model on camera, and pinching through any of them would otherwise score.
+
+**Except when the grab immediately turns out to be a put-back.** `releaseHeld()` checks the snail's
+distance from its `home` slot against `pinchSnapRadius`, and *also* that `phase` is still
+`.playing` — the same gate `attemptGrab(at:)` itself requires. Both true: the snail glides home via
+`Entity.move(to:relativeTo:duration:)`, `game.unscored()` reverses the point, and `removed` clears
+so it is grabbable again. Either false — dropped further off, or the run ended mid-drag — and it
+falls through to the ordinary release below, keeping the point. The phase re-check exists so an
+undo can't land after the run it belongs to has already ended, mirroring why the grab itself needs
+that same gate.
+
+`GameSession.unscored()` mirrors `scored()` exactly: `guard phase == .playing, score > 0 else {
+return }`, `score -= 1`. Symmetric guard, so a late or stale call can't under/overshoot either.
+
+A snap-back release fires its own haptic — `UINotificationFeedbackGenerator.notificationOccurred
+(.success)`, not another `.impact` intensity — so "put back, not collected" reads as its own kind
+of event rather than a third shade of grab/release. See "Haptics" in
+[interaction.md](interaction.md).
 
 **Play Again needs the snails back**, which is why a released snail is hidden rather than deleted:
 
@@ -132,19 +148,22 @@ private struct Snail {
 }
 ```
 
-`updateFadingSnails()` ends a fade with `isEnabled = false` instead of `removeFromParent()`, and
-`restoreSnails()` walks the array putting each entity back to `home`, clearing its
+`updateFading()` ends a fade with `isEnabled = false` instead of `removeFromParent()`, and
+`restoreAll()` walks the array putting each entity back to `home`, clearing its
 `OpacityComponent`, re-enabling it and clearing `removed`. `home` is a *local* transform, so
 restoring it re-seats the snail on the coral wherever the coral currently is — dragging writes
 world-space positions into that same local transform, which is exactly what this undoes.
 
-Restoring is triggered from the render loop by watching for a phase change, not from the buttons,
-because the buttons live in SwiftUI and the entities live in the coordinator:
+Restoring is triggered by watching for a phase change, not from the buttons, because the buttons
+live in SwiftUI and the entities live in `PinchInteraction`. Watched there rather than in the
+coordinator — `PinchInteraction.update()` compares `game.phase` against its own `lastPhase` every
+call, since restoring snails is pinch-side bookkeeping the coordinator has no other reason to know
+about:
 
 ```swift
-if (game.phase == .instructions && lastGamePhase != .instructions)
-    || (game.phase == .countdown && lastGamePhase == .finished) {
-    restoreSnails()
+if (game.phase == .instructions && lastPhase != .instructions)
+    || (game.phase == .countdown && lastPhase == .finished) {
+    restoreAll()
 }
 ```
 
@@ -172,5 +191,5 @@ The status panel is hidden during `countdown`, `playing` and `finished`, where i
 of the HUD. It is kept up for `grace` on purpose: *Hand in frame* with nothing locked is exactly
 the reading needed when a model failed to hold, and the grace screen is the moment it failed.
 
-The pinch crosshair is drawn only during `playing`. It means "this is where the pinch lands",
-which is a lie on every other screen.
+Pinch pickup is only live during `playing` — `attemptGrab(at:)` is gated on `phase == .playing`,
+so pinching through any other screen does nothing.
