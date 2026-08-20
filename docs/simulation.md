@@ -78,58 +78,89 @@ the current run belongs to.
 
 ## PlantingCoral
 
-Corals are stacked beside a structure; pinch them onto its plant points.
+Corals sit around a structure; pinch one up and drop it on a plant point.
 
 ```
-        ▓ SingleCoral_05   ← only this one can be picked up
-        ▓ SingleCoral_04
-        ▓ SingleCoral_03
-  ╔═══════════╗ ▓ _02
-  ║ structure ║ ▓ _01
-  ║  ·  ·  ·  ║          · = CoralPlantPoint_01…03
-  ╚═══════════╝
-   └ the card ┘
+   ▓ SingleCoral_02              ▓ = a coral, wherever the model puts it
+        ╔═══════════╗
+        ║ structure ║   ▓ _03    · = CoralPlantPoint_01…03
+  ▓ _01 ║  ·  ·  ·  ║              (whatever the model draws there)
+        ╚═══════════╝
+         └ the card ┘
 ```
 
-**The pile is built by the app, not by the asset.** Whatever transform a `SingleCoral*` was authored
-with is discarded: `stack(_:in:structure:)` puts them off the structure's right-hand edge, climbing
-from its base, at offsets expressed as fractions of the structure's own size so they hold at any
-export scale. Author the corals wherever is convenient — they will be moved.
+**Nothing is moved at load time.** A `SingleCoral*` stays exactly where the model puts it, the same
+way a `Drupella*` does, and that authored transform is its `home` — where an unplanted coral glides
+back to, and where Play Again restores it. Arrange them in Blender; the app will not second-guess
+the arrangement.
 
-Three details in that which are easy to get wrong:
+That also means `fit(_:named:)` measures the whole model as authored, with no special case: the
+arrangement being sized is the arrangement that will be on screen.
 
-- **It is card-relative, not viewer-relative.** `+x` is across the printed card's width, so from the
-  far side of the card the pile is on your left.
-- **Each coral is re-parented onto the model root first**, preserving its world transform. Without
-  that, `coral.transform` means "within whatever group the artist nested it in", and a translation
-  written there lands somewhere else entirely once an ancestor carries an offset or a scale.
-  Preserving the world transform bakes any ancestor scale into the coral's own transform, so it still
-  looks exactly as authored and only its position is ours to overwrite.
-- **The structure is measured without the corals.** `structureBounds(of:)` skips `SingleCoral*`
-  subtrees, and the result is handed to `fit(_:named:bounds:)` as what to size and centre the model
-  by. Both halves matter: measuring with the corals at their authored positions would scale the model
-  by something meaningless, and measuring with the pile included would shrink the structure to make
-  room for a pile that is *supposed* to hang off the card. This is why `collect` runs **before**
-  `fit` — see `loadModels()`.
+**Grabbing is identical to the drupella game.** Nearest coral to the pinch point by screen
+projection, within `pinchPickRadius`, skipping anything already planted or on a card that is not on
+screen. There is no ordering rule — any coral can be taken at any time.
 
-**Only the top of the pile is grabbable.** `isOnTopOfItsStack(_:)` passes a coral only when no coral
-of its own model is both still in play and higher up. Snails have no `stackIndex` and always pass.
+**A coral plants the instant it is over a free slot**, without waiting to be let go of. Landing one
+is the object of the game, so the moment it is achieved is the moment to take it out of the player's
+hand — and it means the success path never depends on catching the exact frame a pinch opens, which
+is the least reliable thing Vision does. The coral leaves the hand, is scored, and is not draggable
+again.
 
-**Releasing.** Close enough to a free plant point on its *own* structure (`plantSnapRadius`, more
-generous than the drupella `pinchSnapRadius` — putting a snail back is recovering from a mistake,
-landing a coral is the object of the game) and it snaps in and scores. Anything else glides back to
-its slot in the pile.
+**Nothing here draws a plant point.** A `CoralPlantPoint*` is registered exactly as the model ships
+it — its geometry is not stripped, hidden, or replaced — so showing the player where a coral goes is
+the model's job: author a marker on the point and it renders like any other part of the structure.
+An app-drawn indicator was tried and removed; sizing one correctly against an arbitrary model turned
+out to be guesswork the asset can simply answer.
 
-A coral is never lost and never fades. The pile is finite, so a fumbled release must not be able to
-run the board out of corals, and a coral left floating wherever the hand happened to open would be
-both ugly and unreachable.
+**Letting go anywhere else returns the coral to where it started**, exactly as letting go of a snail
+away from its slot does, and it goes back into play. That is the only path that clears `removed`,
+which is why a coral that was genuinely planted can never be picked back up.
+
+### Arming: a coral must be carried before it can plant
+
+`plantArmDistance` (50 screen points) is not a nicety. A board laid out with its corals sitting on or
+beside the slots — a perfectly reasonable arrangement — would otherwise satisfy `plantTarget(for:)`
+on the very frame a coral was picked up, planting it instantly and making it impossible to move at
+all. The pinch has to travel that far from where it grabbed before a plant is allowed, which costs
+nothing when the corals start further away and is invisible in normal play.
+
+### Why "close enough" is measured on screen
+
+`plantSnapRadius` is in **screen points**, like `pinchPickRadius`, not in metres. That is the fix for
+corals that would not snap at all, and the reasoning is worth keeping:
+
+A held piece is dragged along the ray through the pinch point at *the depth it was grabbed at*
+(`updateDrag()`), so it rides a sphere around the camera. A coral picked up in front of the structure
+stays in front of it however carefully it is aimed. Lining it up with a plant point on screen leaves
+the two still centimetres apart in depth, so a world-space radius small enough to mean anything never
+fires — and widening it far enough to cover the depth error would make it fire on slots nowhere near
+the coral.
+
+The player is aiming at a picture, so the test is against the picture. It is the coral's own projected
+position that is compared, not the pinch point, so what is tested is where the coral *appears* — which
+is what is being lined up.
+
+**A planted coral cannot be picked back up.** It keeps the `removed` flag it got at the grab, and
+`attemptGrab(at:)` skips removed pieces, so nothing can take it off the structure again. Only the
+*failed* release clears that flag and hands the coral back — which is why, while the snap was broken,
+planted corals appeared to stay draggable.
+
+The coral takes the plant point's **position and rotation**, so it sits the way the structure was
+authored to hold it — rotate a `CoralPlantPoint` in Blender and the coral planted there adopts that
+angle. Both come from `transformMatrix(relativeTo: entity.parent)`, which converts the point's world
+pose into whatever space the coral actually lives in, so it holds however deeply either is nested.
+
+It **keeps its own scale**, though. A plant point is a marker, and one authored as a cube shrunk to
+10% carries that scale in its transform; adopting it wholesale would shrink the coral the moment it
+was planted.
+
+A coral is never lost and never fades. There are only ever as many corals as the model ships, so a
+fumbled release must not be able to run the board out of them, and a coral left floating wherever the
+hand happened to open would be both ugly and — once it drifted off camera — unreachable.
 
 A planted coral is **not** re-grabbable — a plant is committed, like a removed snail — so
 `unscored()` is a drupella-only affair.
-
-The coral takes the plant point's position and rotation but **keeps its own scale**. A plant point is
-a marker, and one authored as a cube shrunk to 10% carries that scale in its transform; adopting it
-wholesale would shrink the coral the moment it was planted.
 
 ## RemovingDrupella
 
@@ -155,7 +186,7 @@ once a rendered frame whether the card it belongs to is on screen, and it decide
     │      (nothing kept)              │            │            │              │
     │                    card gone, no hand in frame │            │         Play Again
     │                                  ▼            ▼            ▼              │
-    └────────── 5 s elapsed ────────── grace ◀───────┴────────────┘              │
+    └────────── 3 s elapsed ────────── grace ◀───────┴────────────┘              │
                                          │                                       │
                                          └── card back ──▶ resume ◀──────────────┘
                                              (same score, same clock)
@@ -167,7 +198,7 @@ once a rendered frame whether the card it belongs to is on screen, and it decide
 | `instructions` | dimmed panel, what to do, **Start** | yes | straight to `idle`, no grace |
 | `countdown` | 3 · 2 · 1 | yes | `grace` |
 | `playing` | score top left, clock top right, snails grabbable | yes | `grace` |
-| `grace` | "point at the card again" and 5 · 4 · 3 · 2 · 1 | it is what is being waited for | — |
+| `grace` | "point at the card again" and 3 · 2 · 1 | it is what is being waited for | — |
 | `finished` | *Time's up*, score, **Play Again** / **Close** | no | — |
 
 **`idle` and `finished` are the only phases the card can leave freely.** On the result screen the
@@ -204,10 +235,10 @@ model stay grabbable, so a hand across the card mid-grab costs nothing.
 **Card lost, no hand.** The model hides, and the run enters `grace`:
 
 - All the run's own clocks stop. `timeLeft` is untouched, and so is `score`.
-- `graceLeft` counts down from `graceDuration` (5 s).
-- The card coming back inside those 5 s returns the run to the phase it left — `countdown` or
+- `graceLeft` counts down from `graceDuration` (3 s).
+- The card coming back inside those 3 s returns the run to the phase it left — `countdown` or
   `playing` — with the same score and the same time remaining.
-- The 5 s elapsing calls `reset()`: phase `idle`, score 0, clocks back to full. The next
+- The 3 s elapsing calls `reset()`: phase `idle`, score 0, clocks back to full. The next
   simulation card seen starts a completely fresh run.
 
 The timer pausing rather than draining is deliberate. Losing the card is not the player's doing,
@@ -278,7 +309,6 @@ private struct Grabbable {
     let model: Entity     // so a coral can only be planted on its own structure
     let home: Transform   // snail: where it loaded. coral: the stack slot it was given.
     var removed = false
-    var stackIndex: Int?  // planting only; nil for a snail
 }
 ```
 
@@ -289,9 +319,9 @@ restoring it re-seats the snail on the coral wherever the coral currently is —
 world-space positions into that same local transform, which is exactly what this undoes.
 
 `restoreAll()` also clears every `PlantPoint.filled`, or a second planting run would start with the
-structure already full. And `stackIndex` deliberately **survives** a plant: `removed` is what takes a
-coral out of the pile and out of `isOnTopOfItsStack(_:)`'s reckoning, so keeping the slot is what
-lets the pile be rebuilt exactly for the next run.
+structure already full. A planted coral's `home` is deliberately left alone: it stays `removed` so
+nothing can pick it back off the structure, and its authored transform is still there to put it back
+with on the next run.
 
 Restoring is triggered by watching for a phase change, not from the buttons, because the buttons
 live in SwiftUI and the entities live in `PinchInteraction`. Watched there rather than in the

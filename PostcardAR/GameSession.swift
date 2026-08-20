@@ -22,7 +22,7 @@ private let countdownDuration: TimeInterval = 3
 
 /// How long a run survives with its card off camera and no hand to lock it. Long enough to
 /// re-aim a phone, short enough that a run cannot be parked indefinitely.
-private let graceDuration: TimeInterval = 5
+private let graceDuration: TimeInterval = 3
 
 /// One playthrough on one Simulation card.
 ///

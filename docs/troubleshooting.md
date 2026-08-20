@@ -209,8 +209,8 @@ ever set from a tracked card, so the card is provably there.
 
 ### The run restarted from zero when I looked away
 
-The card left the frame with no hand in it either, and stayed away longer than the 5 s grace
-period. Inside those 5 s the score and the clock are held and the card coming back resumes exactly
+The card left the frame with no hand in it either, and stayed away longer than the 3 s grace
+period. Inside those 3 s the score and the clock are held and the card coming back resumes exactly
 where it left; past them the run is wiped and the next scan is a fresh one.
 
 To keep a run alive while re-aiming, leave a hand in frame — the occlusion lock then holds the
@@ -257,6 +257,54 @@ including the no-hand path. Anything that delays the clear will read as the warn
 The `held == nil, !pinchClosed` exclusion in the `tooClose` expression has been dropped. The
 wrist/knuckle guard fails routinely during a genuine grip — normal at close range, not a fault — so
 without that exclusion the blur lands on the very drag it is complaining about, every time.
+
+### A coral will not snap onto a plant point
+
+Work through these in order:
+
+- **The coral has not been carried far enough yet.** A plant is armed only after the pinch has moved
+  `plantArmDistance` (50 points) from where it grabbed — see "Arming" in [simulation.md](simulation.md).
+- **Not close enough on screen.** `plantSnapRadius` is 80 *screen points*, measured against where the
+  coral appears — not a distance in metres. Raise it to be more forgiving.
+- **That slot is already filled**, so it is out of the running.
+- **It belongs to another card.** Plant points are matched to their own model by identity, so a coral
+  can only be planted on the structure it came from.
+- **The run is not `playing`.** A release outside it always returns the coral to where it started.
+
+If it stopped snapping after an edit, check that `plantTarget(for:)` still projects to screen. Reverting
+it to a world-space `simd_distance` is the original bug: a held piece is dragged at its grab depth, so
+it rides a sphere around the camera and never actually reaches the slot in 3D however well it is aimed.
+
+### A planted coral can still be dragged around
+
+The snap did not happen — the failed-release path is the only one that clears `removed`, so what looks
+like "planted but still loose" is really "never planted". See the entry above. A coral that genuinely
+snapped keeps `removed` from its grab and `attemptGrab(at:)` skips it.
+
+### Nothing marks where the corals should go
+
+By design: the app draws nothing at a plant point. Put a marker on the `CoralPlantPoint*` in the
+model and it renders like any other part of the structure. An app-drawn indicator existed briefly and
+was removed — sizing one against an arbitrary model is guesswork the asset can answer directly.
+
+### A planted coral came out at the wrong angle
+
+A coral takes its plant point's rotation. If the exporter baked that transform flat there is no
+rotation left in it to read, and corals will sit upright. Author plant points as **empties** with
+their rotation intact.
+
+### The held snail or coral is hidden behind my hand
+
+`setDrawsInFront(_:on:)` should be taking it out of the depth test while it is held. Check it is
+still called from `attemptGrab(at:)`, and that the material in question is one of the types the
+switch handles — an unrecognised type is passed through untouched, so a model using something exotic
+would occlude normally. It needs iOS 18 or later for `readsDepth`.
+
+### Something draws through the whole scene, permanently
+
+The reverse of the above: a piece kept its `readsDepth = false` after leaving the hand. Every exit
+restores it — `releaseHeld()`, `plant(_:in:)` and `restoreAll()` — so this means a new exit path was
+added without one.
 
 ### Pinching does nothing during the countdown or after time is up
 

@@ -66,7 +66,7 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
 | `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — the grabbable pool, both minigames' grab/release rules, hand-pose sampling, haptics |
 | `PostcardAR/Annotations.swift` | Explanation labels: finding `Annotation*` entities, reading their JSON, projecting them to the screen |
-| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the 30 s run, the 5 s grace. Shared by both minigames |
+| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the 30 s run, the 3 s grace. Shared by both minigames |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
 | `PostcardAR/<image name>.json` | Annotation text for that card, if it has any — see `docs/annotations.md` |
@@ -315,7 +315,7 @@ was computed by the card loop before `activeSimulationCard` was claimed, so it r
 claiming frame and must be overridden to `true` there, or `begin()` and `reset()` alternate forever.
 
 Losing the card mid-*run* splits exactly on the lock. Hand in frame: the model stays, the run does
-not notice. No hand: the model hides and the run freezes for 5 s — score and clock held, the card
+not notice. No hand: the model hides and the run freezes for 3 s — score and clock held, the card
 returning inside that window resuming where it left, the window expiring wiping the run so the
 next scan starts from zero. The clock **pauses** rather than draining, because losing the card is
 not the player's doing.
@@ -336,9 +336,41 @@ the pinch point at fixed camera depth. All of that is shared by both games.
 
 Release is where they part, on the held piece's own `Grabbable.game`. A **snail** near its home slot
 snaps back and un-scores, otherwise fades and hides for good. A **coral** near a free plant point on
-its own model seats itself there and scores, otherwise glides back to its slot in the pile — a coral
-never fades and is never lost, because the pile is finite. Full mechanism, including the open/close
-debounce and the Vision coordinate-space gotcha, in `docs/interaction.md`.
+its own model seats itself there and scores, taking the point's rotation as well as its position,
+otherwise glides back to where it started — a coral never fades and is never lost, because a model
+ships only so many. A planted coral keeps the `removed` flag from its grab, so it cannot be taken
+back off.
+
+**A held piece draws over the hand holding it**, and only while held. People occlusion is right for
+the model you reach past and wrong for the one you are carrying — a pinched snail otherwise vanishes
+behind your own fingers. `setDrawsInFront(_:on:)` flips `readsDepth` (iOS 18+) on the held entity's
+materials and every exit path restores it; leave those restores alone or a piece draws through the
+scene forever. Nothing else is exempted, so hands still occlude the reef.
+
+**A coral plants the instant it is over a free slot**, not on release: landing one is the object of
+the game, and committing immediately keeps the success path off the least reliable thing Vision does,
+which is catching the exact frame a pinch opens. It is gated on `plantArmDistance` — the coral must
+be carried somewhere first, or corals authored beside their slots plant themselves on the frame they
+are grabbed and can never be moved.
+
+**Nothing in the app draws a plant point**, and it should stay that way. A `CoralPlantPoint*` is
+registered exactly as the model ships it — geometry untouched, transform read but never written — so
+the indicator is the asset's job. An app-drawn disc was built and removed: sizing one against an
+arbitrary model is guesswork the model can answer directly. A coral takes its point's rotation, so a
+point whose transform the exporter baked flat plants corals upright; author them as empties.
+
+**When AR geometry looks wrong, dump the asset before theorising.** ModelIO loads a `.usdz`
+headlessly and prints every prim's name, transform and bounds in a few lines of Swift. Two successive
+theories about misplaced markers were both wrong, and one run of that dump settled it.
+
+**A coral's snap target is measured in screen points, not metres**, and that must not be "tidied"
+back into a world-space distance. A held piece is dragged at the depth it was grabbed at, so it rides
+a sphere around the camera: a coral picked up in front of the structure stays in front of it, and
+lining it up with a slot on screen leaves the two centimetres apart in depth. A world-space radius
+small enough to mean anything then never fires, which is exactly the bug this replaced.
+
+Full mechanism, including the open/close debounce and the Vision coordinate-space gotcha, in
+`docs/interaction.md`.
 
 ## Model scale
 
@@ -350,12 +382,9 @@ printed width: that field is what ARKit tracks against, and coupling model size 
 two differently-sized cards could never carry equally-sized models. This keeps the model's
 authored scale irrelevant, and each card's on-screen size is one tunable number.
 
-`fit(_:named:bounds:)` takes an optional override for *what to measure*, and a planting model uses
-it to be sized by its structure alone. Its pile of corals is deliberately parked outside the card,
-and must neither shrink the structure to make room for itself nor drag it off centre. This is why
-`PinchInteraction.collect(from:named:report:)` runs **before** `fit` in `loadModels()`: it builds the
-pile and hands back the bounds to measure. Reversing that order sizes the model by wherever the
-corals happened to be authored, which is meaningless.
+Nothing is repositioned at load time — a `SingleCoral*` stays exactly where the model puts it, like
+a `Drupella*` — so `fit` measures the whole model with no special case, and the arrangement being
+sized is the arrangement that ends up on screen.
 
 ## Imported models carry a whole scene
 

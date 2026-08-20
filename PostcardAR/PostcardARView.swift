@@ -510,26 +510,18 @@ extension PostcardARView {
                     do {
                         let model = try await Entity(named: card.name)
                         removeCameras(from: model)
-
-                        // Before `fit`, not after. A planting model has its corals moved into a pile
-                        // beside the structure here, and hands back the structure's own bounds to be
-                        // sized by — measuring the model first would size it by wherever the corals
-                        // happened to be authored, and measuring it after would size it by the pile,
-                        // which is meant to hang off the card rather than fit on it.
-                        //
-                        // Showcase models are looked at, not touched, so nothing in one ever enters
-                        // the grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to
-                        // find on one. Which minigame a simulation card runs is read from the
-                        // model's own contents, not from its name; see `PinchInteraction.Minigame`.
-                        let bounds = card.kind == .simulation
-                            ? pinch.collect(from: model, named: card.name, report: report)
-                            : nil
-
-                        fit(model, named: card.name, bounds: bounds)
+                        fit(model, named: card.name)
                         card.pivot.addChild(model)
                         // Any card's model may carry `Annotation*` entities; nothing about this
                         // turns on the card's kind, so both kinds are offered to it.
                         annotations.collect(from: model, named: card.name, report: report)
+                        // Showcase models are looked at, not touched, so nothing in one ever enters
+                        // the grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to
+                        // find on one. Which minigame a simulation card runs is read from the
+                        // model's own contents, not from its name; see `PinchInteraction.Minigame`.
+                        if card.kind == .simulation {
+                            pinch.collect(from: model, named: card.name, report: report)
+                        }
                         status.loadedModels += 1
                     } catch {
                         report("Could not load \(card.name).usdz: \(error.localizedDescription)")
@@ -563,12 +555,10 @@ extension PostcardARView {
         /// either the card or the on-screen size actually wanted. Measuring at load time instead
         /// means any `.usdz` lands at exactly its target width regardless of authored scale.
         ///
-        /// - Parameter bounds: what to measure, when that is not the whole model. A planting card
-        ///   passes its structure alone, so that the pile of corals deliberately parked beside the
-        ///   card neither shrinks the structure to make room for itself nor pushes it off centre.
-        ///   Anything outside these bounds still renders — it is simply not what the fit is *for*.
-        private func fit(_ model: Entity, named name: String, bounds: BoundingBox? = nil) {
-            let bounds = bounds ?? model.visualBounds(relativeTo: nil)
+        /// The whole model is measured, including a planting card's loose corals — nothing is moved
+        /// at load time, so the arrangement the asset was authored with is the one being sized.
+        private func fit(_ model: Entity, named name: String) {
+            let bounds = model.visualBounds(relativeTo: nil)
             let targetWidth = modelWidths[name] ?? defaultModelWidth
 
             // Worth reporting rather than skipping quietly: a model authored in metres, left

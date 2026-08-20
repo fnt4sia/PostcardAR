@@ -171,9 +171,7 @@ shapes on every piece and would return whatever entity is topmost in the hierarc
 whichever one is visually closest to the pinch. The chosen piece's distance from the camera is
 recorded once, in `held`, and held fixed for the drag.
 
-`isOnTopOfItsStack(_:)` filters that list further for the planting game: a coral is offered only when
-no coral of its own model is both still in play and higher in the pile, so the player takes it apart
-from the top. A snail has no `stackIndex` and always passes.
+Both games use exactly this, with no extra rule: a coral is picked up the same way a snail is.
 
 **Drag** (`updateDrag()`) runs every rendered frame — same idiom as `hold(_:)` for cards —
 and re-projects `pinchPoint` into a world-space ray via `arView.ray(through:)`, placing the
@@ -193,8 +191,17 @@ rather than `AnimationResource`, since the render loop is already iterating ever
 
 *A coral* looks instead for the nearest free plant point **belonging to its own model** within
 `plantSnapRadius`, and seats itself there — the point's position and rotation, its own scale.
-Missing means gliding back to its slot in the pile, still in play. A coral never fades and is never
-lost: the pile is finite, so a fumbled release must not be able to run a board out of corals.
+In practice a coral rarely reaches here: `updateDrag()` plants it the moment it is over a free slot,
+so a coral still in hand at release is one that was over nothing. The target comes from
+`plantTarget(for:)`, which measures in **screen points**, not metres — a held piece rides a sphere
+around the camera at its grab depth, so lining it up with a slot on screen still leaves the two apart
+in depth and a world-space radius never fires. See "Why 'close enough' is measured on screen" in
+[simulation.md](simulation.md).
+
+A planted coral takes the point's rotation as well as its position, so it sits the way the structure
+was authored to hold it, and keeps the `removed` flag from its grab, so it cannot be picked back off.
+Missing means gliding back to where it started, still in play. A coral never fades and is never lost:
+a model ships only so many, so a fumbled release must not be able to run a board out of them.
 
 Hidden, not `removeFromParent()`: Play Again needs the same snails back on the same coral, and
 keeping them in the tree makes that a transform reset rather than a second load of a model already
@@ -214,6 +221,35 @@ cannot be re-grabbed on its way out.
 **Scoring happens at the grab, not the release** — unless the release turns out to be a put-back,
 in which case it is reversed. See "Scoring, and putting the snails back" in
 [simulation.md](simulation.md).
+
+## A held piece draws over the hand holding it
+
+ARKit's people occlusion mattes the player's hand in front of the models, per pixel and by depth.
+That is right for the coral you are reaching *past* and wrong for the one you are carrying: without
+an exception, a snail pinched off the reef disappears behind the fingers holding it, and a coral is
+invisible for most of the journey to its slot.
+
+`setDrawsInFront(_:on:)` is the exception, applied to the held piece and to nothing else:
+
+```swift
+case var pbr as PhysicallyBasedMaterial: pbr.readsDepth = !inFront; return pbr
+```
+
+`readsDepth` (iOS 18+) takes the entity out of the depth test, so it draws over what is already
+there — the hand matte included — for exactly as long as it is held. Every other model keeps
+occluding normally, which is the whole point: the hand still goes in front of the reef.
+
+Three things about it worth knowing:
+
+- **It is on the concrete material types, not on the `Material` protocol.** Hence the switch over
+  `PhysicallyBasedMaterial` (what a `.usdz` imports as), `UnlitMaterial` and `SimpleMaterial`, with
+  anything unrecognised passed through untouched rather than dropped.
+- **Materials are values inside a `ModelComponent`**, so each one has to be read, changed, and put
+  back — and the walk is recursive, which is also what carries it to a snail's re-parented outline.
+- **Every exit restores it.** `attemptGrab(at:)` turns it on; `releaseHeld()` turns it off before it
+  decides what the release meant, `plant(_:in:)` turns it off as it seats a coral, and
+  `restoreAll()` turns it off for anything still held. A piece left with the flag set would draw
+  through the scene forever.
 
 ## Hand presence also locks the cards
 
@@ -333,9 +369,9 @@ One walk, reused for all four prefixes — `Drupella`, `CoralPlantPoint`, `Singl
 which is how a model declares which minigame it is — see [simulation.md](simulation.md).
 
 Called once per **simulation** model from `loadModels()` in `PostcardARView.swift`, **before**
-`fit(_:named:bounds:)` — the coordinator crossing into `PinchInteraction` is the one place model
-loading and pinch pickup actually touch, and the ordering matters because a planting model gets its
-corals rearranged here and hands back the bounds the model should then be sized by.
+`fit(_:named:)` — the coordinator crossing into `PinchInteraction` is the one place model loading
+and pinch pickup actually touch. Nothing is repositioned here: both games take every piece exactly
+where the model left it.
 
 Everything found is flattened into one `grabbables` array shared across every simulation card:
 pickup works on whichever piece is nearest the pinch, regardless of which card's model it came from.
@@ -359,13 +395,12 @@ non-outline matches go into `grabbables`. Once reparented, an outline moves for 
 snap-back, `restoreAll()` all write the snail's own transform, and RealityKit composes the child's
 world transform from it same as any other parent/child pair.
 
-### Plant points are hidden, not disabled
+### Plant points are left alone
 
-`hideGeometry(of:)` strips `ModelComponent` from a `CoralPlantPoint*` and its descendants, so a
-marker authored as a visible cube stops rendering while its transform stays live and keeps reporting
-where the slot is as the card moves. `isEnabled = false` would also work for a leaf marker but takes
-any nested geometry with it, and the same helper is shared with annotations, where a disabled entity
-would break the on-screen test outright — see [annotations.md](annotations.md).
+A `CoralPlantPoint*` is registered as-is: its geometry is not stripped, hidden or replaced, and its
+transform is read but never written. Whatever the model draws at that point is what the player sees,
+which is the whole of "the indicator is the asset's job". Annotations are the opposite case and do
+strip geometry, for reasons particular to them — see [annotations.md](annotations.md).
 
 ## Haptics
 
@@ -408,9 +443,8 @@ exists:
 
 | Constant | Does | Raise it to… |
 |---|---|---|
-| `plantSnapRadius` | how near a free plant point a coral must be let go of | make planting more forgiving, at the risk of a coral jumping to a slot you did not mean |
-| `coralStackGap` | gap between the structure's edge and the pile, as a fraction of the structure's width | push the pile further off the card |
-| `coralStackSpacing` | pile spacing, as a multiple of a coral's own height | separate the corals; below `1.0` they overlap |
+| `plantSnapRadius` | how near a free plant point a coral must *appear*, in screen points | make planting more forgiving, at the risk of a coral jumping to a slot you did not mean |
+| `plantArmDistance` | how far a coral must be carried before it may plant | stop corals planting themselves the instant they are picked up |
 
 `handScaleJointConfidenceMinimum` trades `ratio` update reliability for how loosely a `ratio`
 sample can be trusted — lower it further if the ring/release still stalls at close range, raise
