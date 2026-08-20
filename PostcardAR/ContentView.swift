@@ -11,14 +11,10 @@ struct ContentView: View {
     @State private var isScanning = false
 
     var body: some View {
-        Button("Start Scanning") {
-            isScanning = true
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .fullScreenCover(isPresented: $isScanning) {
-            ScannerScreen()
-        }
+        HomeView(action: { isScanning = true })
+            .fullScreenCover(isPresented: $isScanning) {
+                ScannerScreen()
+            }
     }
 }
 
@@ -86,21 +82,14 @@ private struct ScannerScreen: View {
 
         case .instructions:
             dimmed {
-                VStack(spacing: 20) {
-                    Text("Save the Coral")
-                        .font(.largeTitle.bold())
-                    Text("""
-                        Drupella snails are eating this coral.
-                        Pinch one with your thumb and finger to pull it off.
+                InstructionsPopup(
+                    title: "THE SILENT KILLER",
+                    message: """
+                        Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off.
                         Clear as many as you can in 30 seconds.
-                        """)
-                        .multilineTextAlignment(.center)
-                    Button("Start") { game.start() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .padding(.top, 8)
-                }
-                .padding(32)
+                        """,
+                    action: { game.start() }
+                )
             }
 
         case .countdown:
@@ -136,17 +125,15 @@ private struct ScannerScreen: View {
         case .finished:
             dimmed {
                 VStack(spacing: 16) {
-                    Text("Time's up")
-                        .font(.largeTitle.bold())
-                    Text("Score \(game.score)")
-                        .font(.title.weight(.semibold).monospacedDigit())
-                    Button("Play Again") { game.playAgain() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .padding(.top, 8)
+                    FinishScreen(
+                        label: "CLEARED",
+                        value: "\(game.score)",
+                        title: "DRUPELLA REMOVED",
+                        buttonTitle: "Play Again",
+                        action: { game.playAgain() }
+                    )
                     Button("Close") { dismiss() }
                 }
-                .padding(32)
             }
         }
     }

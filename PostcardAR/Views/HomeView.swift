@@ -3,9 +3,8 @@
 //  PostcardAR
 //
 //  Reproduces the Figma "Home" screen (node 253:1487) — the start screen shown before the
-//  camera opens. Standalone: not wired into ContentView/ScannerScreen yet, no navigation,
-//  no state. All positions below are the frame-relative coordinates Figma reports for this
-//  node, kept 1:1 as points.
+//  camera opens. Wired into ContentView's idle state; `action` starts the scan. All positions
+//  below are the frame-relative coordinates Figma reports for this node, kept 1:1 as points.
 //
 //  The card outline and the two corner grids are drawn from the exact SVGs Figma exports for
 //  those nodes (bundled in Assets.xcassets as HomeCardShape/HomeGridTop/HomeGridBottom),
@@ -23,6 +22,8 @@ import SwiftUI
 /// The start screen: navy background, two faint corner grids, a notched card holding the
 /// title, subtitle, and "Scan a Card" button.
 struct HomeView: View {
+    var action: () -> Void = {}
+
     // Forces font registration before any Text below resolves its font — see DesignTokens.
     private let fontsRegistered = DesignTokens.fontsRegistered
 
@@ -69,7 +70,7 @@ struct HomeView: View {
                     .multilineTextAlignment(.center)
                     .foregroundStyle(DesignTokens.blackText)
             }
-            Button("Scan a Card") {}
+            Button("Scan a Card", action: action)
                 .font(.custom("InterVariable", size: 18))
                 .foregroundStyle(DesignTokens.whiteText)
                 .padding(.horizontal, 20)
