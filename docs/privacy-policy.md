@@ -2,17 +2,17 @@
 title: Privacy Policy
 ---
 
-# Privacy Policy for PostcardAR
+# Privacy Policy for sci.mulate
 
 **Effective date:** August 20, 2026
 
-PostcardAR ("the app") uses your device's camera to recognize printed cards and
+sci.mulate ("the app") uses your device's camera to recognize printed cards and
 display AR content on top of them. This policy explains what happens to your
 data.
 
 ## Data collection
 
-PostcardAR does not collect, store, or transmit any personal data. Specifically:
+sci.mulate does not collect, store, or transmit any personal data. Specifically:
 
 - **Camera feed**: used live, on-device, by ARKit and Vision to detect cards
   and hand poses. No frame, image, or video is saved, recorded, or sent
@@ -25,7 +25,7 @@ PostcardAR does not collect, store, or transmit any personal data. Specifically:
 
 ## Third parties
 
-None. PostcardAR has no third-party dependencies and shares no data with
+None. sci.mulate has no third-party dependencies and shares no data with
 anyone.
 
 ## Children's privacy
