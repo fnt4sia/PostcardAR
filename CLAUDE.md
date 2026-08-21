@@ -63,12 +63,14 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 
 | Path | Purpose |
 |---|---|
-| `PostcardAR/ContentView.swift` | Start button, the camera screen's status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
+| `PostcardAR/ContentView.swift` | Start button, the loading/camera swap, the status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
+| `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan. Owns `fit`, `removeCameras`, `modelWidths` |
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
 | `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — the grabbable pool, both minigames' grab/release rules, hand-pose sampling, haptics |
 | `PostcardAR/Annotations.swift` | Explanation labels: finding `Annotation*` entities, reading their JSON, projecting them to the screen |
 | `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the run, the 3 s grace. Shared by both minigames |
 | `PostcardAR/Minigame.swift` | The two games' settings: run length and every word the player reads. One block per game |
+| `PostcardAR/Views/` | The Figma-traced screens — home, loading, instructions, countdown, HUD, result — and `DesignTokens` |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
 | `PostcardAR/<image name>.json` | Annotation text for that card, if it has any — see `docs/annotations.md` |
@@ -397,7 +399,7 @@ Full mechanism, including the open/close debounce and the Vision coordinate-spac
 Anchoring does not scale. A `.usdz` renders at whatever real-world size it was authored at,
 regardless of how big its card is. So each model is measured with `visualBounds` at load time and
 scaled to a fixed target width in metres, looked up by card name in `modelWidths` (falling back
-to `defaultModelWidth`) — see `fit(_:named:)`. Deliberately not derived from the card's own
+to `defaultModelWidth`) — see `fit(_:named:)` in `ModelLibrary.swift`. Deliberately not derived from the card's own
 printed width: that field is what ARKit tracks against, and coupling model size to it would mean
 two differently-sized cards could never carry equally-sized models. This keeps the model's
 authored scale irrelevant, and each card's on-screen size is one tunable number.
@@ -411,7 +413,7 @@ sized is the arrangement that ends up on screen.
 A `.usdz` from Blender contains the lighting rig and the viewport camera, not just the mesh.
 RealityKit turns a USD `Camera` prim into a real `PerspectiveCamera` entity, and adding one to
 an `ARView` scene hands rendering to it — **the passthrough camera freezes**, with no error and
-nothing in the log. `removeCameras(from:)` strips them at load time; do not remove that call.
+nothing in the log. `ModelLibrary.removeCameras(from:)` strips them at load time; do not remove that call.
 
 Imported lights come in as inert entities and are left alone.
 
@@ -419,13 +421,35 @@ Diagnose an imported asset by walking the loaded entity tree and printing compon
 than by reading the file size — the shipped coral is 9 MB and froze the camera, while a 52 MB
 model did not.
 
+## Loading, and where it happens
+
+**Nothing loads inside the camera screen.** `ModelLibrary` reads the reference images and every
+model once per launch, behind `LoadingView`, and `Coordinator.start(in:)` only clones what is
+already there. Three things forced that shape, and undoing any of them brings back a hang:
+
+1. `ARReferenceImage.referenceImages(inGroupNamed:)` is synchronous and decodes every card image
+   in the group to full-size RGBA. Called from `makeUIView` — which is where it used to be — it
+   blocks the presentation of the camera screen. It now runs in a detached task.
+2. **Reference images have a resolution ceiling.** ARKit gains nothing above ~1800px on the long
+   edge; the two cards once shipped at 5855 × 7605, which is 356 MB of bitmap to decode before the
+   camera could appear. See "Resolution" in `docs/reference-images.md`.
+3. `ScannerScreen` lives in a `fullScreenCover`, so it and its coordinator are destroyed on
+   dismiss. The library is `@State` on `ContentView`, one level *above* the cover, which is what
+   makes it survive — put it inside and every scan reloads everything, as it once did.
+
+`model(named:)` hands out `clone(recursive:)` rather than the model itself. A scan mutates what it
+is given — corals get planted, snails get hidden, annotation markers lose their geometry — and
+`PinchInteraction` reads each piece's *current* transform as the `home` it restores to, so reusing
+one tree would record a planted coral's slot as its home. Clones share `MeshResource` and
+materials, so nothing is re-uploaded.
+
 ## Model weight
 
 Everything runs on the main thread alongside ARKit and SwiftUI, so a heavy `.usdz` stalls the
 camera rather than degrading gracefully. Budget **512×512 textures** and **under ~50k
-triangles**, and note that the budget is now shared: every card's model is loaded at launch and
-stays resident, so ten cards means ten models in memory. Models load one after another rather
-than concurrently — decoding is main-thread work either way, so overlapping them only makes a
+triangles**, and note that the budget is shared: every card's model is loaded at launch and stays
+resident, so ten cards means ten models in memory. Models load one after another rather than
+concurrently — decoding is main-thread work either way, so overlapping them only makes a
 longer stall. File size is not the measure — a `.usdz` is a zip of uncompressed assets, and a
 2048² texture costs ~21 MB of GPU memory with mipmaps however well its PNG compressed. See
 "Weight" in `docs/models.md` for how to check and reduce an asset.

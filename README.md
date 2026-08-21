@@ -10,7 +10,7 @@ Cards come in two kinds, decided by the front of the card's name:
   plant corals onto a biorock frame in 45. Clear the card and the run ends there and then.
 
 Everything is first-party Apple: SwiftUI for the shell, ARKit for tracking, RealityKit for
-rendering, Vision for the pinch gesture. No third-party dependencies, no package manager, six
+rendering, Vision for the pinch gesture. No third-party dependencies, no package manager, seven
 Swift files.
 
 ## Requirements
@@ -52,6 +52,9 @@ PostcardAR/
 ```
 
 1. **Print the card**, and photograph it flat on, evenly lit, no glare, cropped to its edges.
+   Export it at roughly **1400px on the long edge** — ARKit gains nothing above that, and a
+   print-resolution image costs seconds of loading and hundreds of megabytes to decode. See
+   [docs/reference-images.md](docs/reference-images.md).
 2. **Add the image.** In `Assets.xcassets`, select **AR Resources**, drag the image in, and name
    the entry after the model it should show — prefixed `Simulation` if it should run the minigame,
    `Showcase` otherwise. (Only `Simulation` is tested for; any other prefix, or none, is a
@@ -128,6 +131,7 @@ while a hand is in frame keeps its model locked in place until the hand leaves �
 | `PostcardAR/Annotations.swift` | Explanation labels and the JSON behind them |
 | `PostcardAR/GameSession.swift` | The run's phases, score, and clocks, shared by both minigames |
 | `PostcardAR/Minigame.swift` | Each game's run length and on-screen words — one block per game |
+| `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world size |
 | `PostcardAR/<name>.usdz` | The model for the card of that name |
 | `PostcardAR/<name>.json` | Annotation text for that card, if it has any |

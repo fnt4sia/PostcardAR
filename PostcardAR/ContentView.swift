@@ -10,12 +10,26 @@ import SwiftUI
 struct ContentView: View {
     @State private var isScanning = false
 
+    /// Owned here, *above* the `fullScreenCover`, so it outlives the camera screen. That is the
+    /// whole cache: dismissing the scanner tears down its `Coordinator` and its `ARView`, and the
+    /// library — reference images and models both — survives to be reused by the next scan.
+    @State private var library = ModelLibrary()
+
     var body: some View {
-        HomeView(action: { isScanning = true })
-            .fullScreenCover(isPresented: $isScanning) {
-                ScannerScreen()
+        HomeView(action: {
+            isScanning = true
+            // Returns immediately once the library is loaded, which is why only the first scan of
+            // a launch ever sees `LoadingView`.
+            Task { await library.load() }
+        })
+        .fullScreenCover(isPresented: $isScanning) {
+            if library.isReady {
+                ScannerScreen(library: library)
                     .onDisappear { isScanning = false }
+            } else {
+                LoadingView(loaded: library.loaded, total: library.total)
             }
+        }
     }
 }
 
@@ -26,13 +40,16 @@ struct ContentView: View {
 /// view to changes in that property. `game` also flows the other way, since Start and Play Again
 /// are buttons; the coordinator notices those by watching the phase change, not by being called.
 private struct ScannerScreen: View {
+    /// Loaded before this screen was built — see `ModelLibrary`.
+    let library: ModelLibrary
+
     @Environment(\.dismiss) private var dismiss
     @State private var status = ARStatus()
     @State private var game = GameSession()
     @State private var annotations = AnnotationLayer()
 
     var body: some View {
-        PostcardARView(status: status, game: game, annotations: annotations)
+        PostcardARView(status: status, game: game, annotations: annotations, library: library)
             .ignoresSafeArea()
             .overlay(alignment: .topLeading) { annotationLayer }
 

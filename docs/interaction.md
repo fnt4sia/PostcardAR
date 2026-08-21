@@ -369,7 +369,7 @@ One walk, reused for all four prefixes — `Drupella`, `CoralPlantPoint`, `Singl
 `collect(from:named:report:)` runs it first for `CoralPlantPoint` and, finding none, for `Drupella`,
 which is how a model declares which minigame it is — see [simulation.md](simulation.md).
 
-Called once per **simulation** model from `loadModels()` in `PostcardARView.swift`, **before**
+Called once per **simulation** model from `attachModels()` in `PostcardARView.swift`, **before**
 `fit(_:named:)` — the coordinator crossing into `PinchInteraction` is the one place model loading
 and pinch pickup actually touch. Nothing is repositioned here: both games take every piece exactly
 where the model left it.

@@ -118,7 +118,7 @@ The passthrough video stops following the device and the app looks completely fr
 error, nothing in the console, and it happens the moment the model is added to the scene — so it
 looks like a hang in whatever code ran last, not like an asset problem.
 
-`removeCameras(from:)` strips them at load time, so this is handled for any model you drop in.
+`ModelLibrary.removeCameras(from:)` strips them at load time, so this is handled for any model you drop in.
 Do not remove that call. Lights import as inert entities and are harmless.
 
 To see what an asset actually contains, dump the prim types:
