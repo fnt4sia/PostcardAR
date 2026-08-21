@@ -61,6 +61,33 @@ enum Minigame {
 }
 ```
 
+It lives in [`Minigame.swift`](../PostcardAR/Minigame.swift), together with everything about a game
+that is a **setting** rather than a rule — how long a run lasts and every word the player reads:
+
+```swift
+var settings: Settings {
+    switch self {
+    case .removingDrupella:
+        Settings(duration: 30, title: "THE SILENT KILLER", instructions: "…",
+                 resultLabel: "CLEARED", resultTitle: "DRUPELLA REMOVED")
+    case .plantingCoral:
+        Settings(duration: 45, title: "REBUILD THE REEF", instructions: "…",
+                 resultLabel: "PLANTED", resultTitle: "CORAL PLANTED")
+    }
+}
+```
+
+One literal per game, so re-timing or re-wording one is a single block to edit and `ContentView`
+holds no copy of its own — it reads `game.minigame.settings`, and nothing in the UI knows which game
+is on. Planting gets the longer clock because carrying a coral to a *named* slot is a slower gesture
+than lifting a snail off wherever it sits.
+
+The *rules* deliberately stay out of that enum. What a grab and a release mean is the whole
+difference between the two games, and it lives in exactly two places — `releaseHeld()` and the
+plant-on-hover branch of `updateDrag()` — both switching on the piece in hand. Folding them into
+`Minigame` would mean handing the enum the entity pool, the `ARView` and the session to work on: a
+manager, for no gain.
+
 The alternative was a second naming rule stacked on the `Simulation` prefix —
 `Simulation_Planting_*` against `Simulation_Drupella_*`. Reading the contents instead keeps the
 promise that adding a card is dropping files and changing no code, and leaves one convention to
@@ -186,8 +213,8 @@ A coral is never lost and never fades. There are only ever as many corals as the
 fumbled release must not be able to run the board out of them, and a coral left floating wherever the
 hand happened to open would be both ugly and — once it drifted off camera — unreachable.
 
-A planted coral is **not** re-grabbable — a plant is committed, like a removed snail — so
-`unscored()` is a drupella-only affair.
+A planted coral is **not** re-grabbable — a plant is committed, like a removed snail — so nothing
+ever needs to take a point back off the board.
 
 ## RemovingDrupella
 
@@ -195,8 +222,8 @@ Drupella snails are eating the coral; pinch them off. The original game, and the
 snails are grabbable exactly where they were authored, there is nowhere to put them, and a released
 snail fades out and stays out.
 
-It scores at the **grab**, not the release, because a grabbed snail always ends up removed — see
-"Scoring, and putting the snails back" below, including the one case that reverses it.
+It scores at the **release**, and only when the snail actually comes off — a release near its home
+slot is a put-back and scores nothing. See "Scoring, and putting the pieces back" below.
 
 Each snail's outline mesh ships as a flat sibling rather than a child and is re-parented under its
 snail at load time, or it would stay behind on the coral while the snail is dragged off. Details in
@@ -208,8 +235,8 @@ One `GameSession`, in `GameSession.swift`. It knows nothing about ARKit: the coo
 once a rendered frame whether the card it belongs to is on screen, and it decides what that means.
 
 ```
-  idle ──card seen──▶ instructions ──Start──▶ countdown ──▶ playing ──30s──▶ finished
-    ▲    ◀──card gone──┘               │            │            │              │
+  idle ──card seen──▶ instructions ──Start──▶ countdown ──▶ playing ──time up──▶ finished
+    ▲    ◀──card gone──┘               │            │            │  or card clear │
     │      (nothing kept)              │            │            │              │
     │                    card gone, no hand in frame │            │         Play Again
     │                                  ▼            ▼            ▼              │
@@ -224,9 +251,9 @@ once a rendered frame whether the card it belongs to is on screen, and it decide
 | `idle` | nothing but the status panel | — | — |
 | `instructions` | dimmed panel, what to do, **Start** | yes | straight to `idle`, no grace |
 | `countdown` | 3 · 2 · 1 | yes | `grace` |
-| `playing` | score top left, clock top right, snails grabbable | yes | `grace` |
+| `playing` | clock and score HUD, pieces grabbable | yes | `grace` |
 | `grace` | "point at the card again" and 3 · 2 · 1 | it is what is being waited for | — |
-| `finished` | *Time's up*, score, **Play Again** / **Close** | no | — |
+| `finished` | score, **Play Again** / **Close** — reached by the clock running out *or* by clearing the card | no | — |
 
 **`idle` and `finished` are the only phases the card can leave freely.** On the result screen the
 player is reading a score rather than aiming the phone, so it stays up until it is dismissed,
@@ -242,10 +269,17 @@ puts the instructions back from scratch.
 That makes one ordering detail load-bearing in `Coordinator.updateGame(cardPresent:candidate:)`.
 `cardPresent` is worked out in the card loop that runs *before* it, back when `activeSimulationCard`
 was still `nil` — so on the very frame a card claims the session it reads `false`, however plainly
-the card is in view. Passing that straight through would send the `instructions` phase `begin()`
+the card is in view. Passing that straight through would send the `instructions` phase `begin(_:target:)`
 just started back to `idle` on the same frame, and the two would alternate forever. The claim
 branch therefore overrides it to `true`, which is sound because `candidate` is only ever set from a
 card that was *tracked* this frame.
+
+**A card only claims the session once its model has arrived.** `updateGame(cardPresent:candidate:)`
+asks `PinchInteraction.setup(for:)` for the card's game and target, and that answer does not exist
+until `collect(from:named:report:)` has run on the loaded `.usdz`. A card seen while its model is
+still decoding therefore puts no panel up, and neither does one whose model holds neither plant
+points nor snails — which is already reported to the status panel rather than silently starting a
+run with nothing in it.
 
 ## Losing the card mid-run
 
@@ -293,39 +327,76 @@ them — the overlays read the whole-second properties (`secondsRemaining`, `cou
 
 ## Scoring, and putting the pieces back
 
-Both games score `+1` a piece and run on the same 30 s clock, but **they score at opposite ends of
-the gesture**, and that is forced by what a grab means in each:
+Both games score `+1` a piece, and **both score where their gesture actually succeeds** — never at
+the grab, which is only a piece in hand:
 
-| | Scored at | Because |
+| | Scored in | The success |
 |---|---|---|
-| RemovingDrupella | the grab | a grabbed snail always ends up removed, so the grab commits it |
-| PlantingCoral | the plant | a grabbed coral may never reach a plant point, so the grab commits nothing |
+| RemovingDrupella | `releaseSnail(_:)` | let go of clear of the coral, so the snail fades and stays off |
+| PlantingCoral | `plant(_:in:)` | seated in a free plant point on its own structure |
 
-Everything else below is about the drupella case.
+Neither game therefore has anything to take back. A snail put straight back on the coral, and a
+coral carried nowhere and dropped, both simply score nothing — where the removal game used to score
+at the grab and then call `unscored()` on the put-back, making a point appear and vanish for a
+gesture that achieved nothing. `GameSession` has no `unscored()` any more.
 
-Score is `+1` per drupella snail picked off, counted in `attemptGrab(at:)` rather than on release.
-A grabbed snail is committed the instant it is picked up — that is the moment the haptic fires —
-which avoids the awkward case of a snail still in hand when the buzzer goes.
+`GameSession.scored()` is gated on `phase == .playing`, which is what keeps a late call harmless:
+a snail still in hand when the buzzer goes is dropped by `PinchInteraction.update()` the moment the
+phase leaves `playing`, fades away, and counts for nothing. Grabbing is gated on the same phase, so
+instructions, countdown, grace and the result screen — all of which leave the model on camera —
+cannot be pinched through.
 
-Grabbing is gated on `phase == .playing`. Instructions, countdown, grace and the result screen all
-leave the model on camera, and pinching through any of them would otherwise score.
+**A put-back scores nothing.** `releaseSnail(_:)` checks the snail's distance from its `home` slot
+against `pinchSnapRadius`, and *also* that `phase` is still `.playing`. Both true: the snail glides
+home via `Entity.move(to:relativeTo:duration:)` and `removed` clears, so it is grabbable again, and
+`scored()` is never called. Either false — dropped further off, or the run ended mid-drag — and it
+fades out; the `scored()` on that path is itself phase-gated, so a run that ended mid-drag still
+scores nothing.
 
-**Except when the grab immediately turns out to be a put-back.** `releaseHeld()` checks the snail's
-distance from its `home` slot against `pinchSnapRadius`, and *also* that `phase` is still
-`.playing` — the same gate `attemptGrab(at:)` itself requires. Both true: the snail glides home via
-`Entity.move(to:relativeTo:duration:)`, `game.unscored()` reverses the point, and `removed` clears
-so it is grabbable again. Either false — dropped further off, or the run ended mid-drag — and it
-falls through to the ordinary release below, keeping the point. The phase re-check exists so an
-undo can't land after the run it belongs to has already ended, mirroring why the grab itself needs
-that same gate.
+### Clearing the card ends the run
 
-`GameSession.unscored()` mirrors `scored()` exactly: `guard phase == .playing, score > 0 else {
-return }`, `score -= 1`. Symmetric guard, so a late or stale call can't under/overshoot either.
+`begin(_:target:)` is handed a `target` along with the game, and `scored()` goes straight to
+`finished` on reaching it:
+
+```swift
+func scored() {
+    guard phase == .playing else { return }
+    score += 1
+
+    if target > 0, score >= target {
+        timeLeft = 0
+        phase = .finished
+        publish()
+    }
+}
+```
+
+Clearing the card is the object of both games, so achieving it is the ending — sitting out the rest
+of the clock with nothing left to pick up or plant is only a wait.
+
+The target is **counted from the model**, by `PinchInteraction.collect(from:named:report:)` at load
+time, and handed over by `setup(for:)`:
+
+| Game | Target |
+|---|---|
+| RemovingDrupella | every `Drupella*` on the card (outlines excluded — they are re-parented, not grabbable) |
+| PlantingCoral | `min(SingleCoral*, CoralPlantPoint*)` |
+
+The smaller of the two for planting, not the number of slots: a board shipping fewer corals than
+points can never fill them all, so a target of the slot count would never be reached and the early
+finish would never fire. That mismatch is already reported to the status panel at load time.
+
+`target > 0` guards the whole thing, so a card that somehow registered no pieces runs its clock out
+rather than finishing on the first frame.
+
+Because the target comes from the `.usdz`, adding or removing a snail in Blender is still no code
+change — and the HUD's `n/total` follows it, since `ContentView` passes `game.target` rather than a
+number of its own.
 
 A snap-back release fires its own haptic — `UINotificationFeedbackGenerator.notificationOccurred
 (.success)`, not another `.impact` intensity — so "put back, not collected" reads as its own kind
-of event rather than a third shade of grab/release. See "Haptics" in
-[interaction.md](interaction.md).
+of event rather than a third shade of grab/release, and it is the one release that does *not* score.
+See "Haptics" in [interaction.md](interaction.md).
 
 **Play Again needs the pieces back**, which is why a released snail is hidden rather than deleted:
 

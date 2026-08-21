@@ -2,8 +2,9 @@
 //  GameSession.swift
 //  PostcardAR
 //
-//  The run that happens on a Simulation card: instructions, countdown, thirty seconds of picking
-//  drupella off the coral, a score.
+//  The run that happens on a Simulation card: instructions, countdown, a timed spell of play, a
+//  score. Both minigames share it unchanged — which one is running only decides how long the run
+//  lasts and how many pieces finish it, both of which arrive in `begin(_:target:)`.
 //
 //  A plain state machine with a clock. It knows nothing about ARKit — the coordinator tells it
 //  once a frame whether the card it belongs to is on screen, and it decides what that means. Two
@@ -13,9 +14,6 @@
 //
 
 import Foundation
-
-/// How long one run lasts.
-private let runDuration: TimeInterval = 30
 
 /// The 3 · 2 · 1 between tapping Start and the first grab.
 private let countdownDuration: TimeInterval = 3
@@ -56,9 +54,19 @@ final class GameSession {
     private(set) var phase: Phase = .idle
     private(set) var score = 0
 
+    /// Which game this run is, for the clock and for the words `ContentView` puts on screen. Set
+    /// by `begin(_:target:)` and kept afterwards, so the result panel still knows what was played
+    /// once the run is over. The value before the first run is never drawn.
+    private(set) var minigame: Minigame = .removingDrupella
+
+    /// Score that finishes the run outright — every snail on the card, or every plant point that
+    /// has a coral to fill it. Counted from the model at load time; see
+    /// `PinchInteraction.setup(for:)`.
+    private(set) var target = 0
+
     /// Whole seconds, for the overlays. Written only when the displayed value actually changes:
     /// `@Observable` notifies on every set without comparing, and these are set once a frame.
-    private(set) var secondsRemaining = Int(runDuration)
+    private(set) var secondsRemaining = 0
     private(set) var countdownNumber = Int(countdownDuration)
     private(set) var graceSecondsRemaining = Int(graceDuration)
 
@@ -67,7 +75,7 @@ final class GameSession {
     /// `@ObservationIgnored` throughout this block: these are written on every rendered frame and
     /// nothing draws them — the overlays read the whole-second properties above. Left tracked,
     /// each one would hit the observation registrar sixty times a second to tell nobody anything.
-    @ObservationIgnored private var timeLeft = runDuration
+    @ObservationIgnored private var timeLeft: TimeInterval = 0
     @ObservationIgnored private var countdownLeft = countdownDuration
     @ObservationIgnored private var graceLeft = graceDuration
 
@@ -81,8 +89,15 @@ final class GameSession {
     // MARK: Transitions
 
     /// A Simulation card has been seen and nothing is running: put the instructions up.
-    func begin() {
+    ///
+    /// - Parameters:
+    ///   - minigame: what that card's model turned out to be, which fixes the run's length and
+    ///     everything the player reads.
+    ///   - target: how many pieces it holds — the score at which the run ends early.
+    func begin(_ minigame: Minigame, target: Int) {
         guard phase == .idle else { return }
+        self.minigame = minigame
+        self.target = target
         restart(into: .instructions)
     }
 
@@ -103,25 +118,27 @@ final class GameSession {
         restart(into: .idle)
     }
 
-    /// A snail has been picked off. Scored at the grab rather than the release: a grabbed snail
-    /// always ends up removed, so the grab is the moment it is committed, and it is also the
-    /// moment the player feels the haptic.
+    /// A piece has actually been placed or picked off — a coral seated in a plant point, a snail
+    /// carried clear of the coral and let go of. Both games call it at the moment their gesture
+    /// succeeds and never before, so nothing here has to be taken back.
+    ///
+    /// **Reaching `target` ends the run on the spot.** Clearing the card is the object of both
+    /// games, so achieving it is the ending — sitting out the rest of the clock with nothing left
+    /// to pick up or plant is only a wait.
     func scored() {
         guard phase == .playing else { return }
         score += 1
-    }
 
-    /// A grab turned out to be a snap-back — put down near its home slot, not carried off — so
-    /// the score `scored()` already counted is reversed. Same phase gate as `scored()`, so an
-    /// undo can't land after the run it belongs to has already ended.
-    func unscored() {
-        guard phase == .playing, score > 0 else { return }
-        score -= 1
+        if target > 0, score >= target {
+            timeLeft = 0
+            phase = .finished
+            publish()
+        }
     }
 
     private func restart(into phase: Phase) {
         score = 0
-        timeLeft = runDuration
+        timeLeft = minigame.settings.duration
         countdownLeft = countdownDuration
         graceLeft = graceDuration
         lastUpdate = nil

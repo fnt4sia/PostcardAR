@@ -67,7 +67,8 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
 | `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — the grabbable pool, both minigames' grab/release rules, hand-pose sampling, haptics |
 | `PostcardAR/Annotations.swift` | Explanation labels: finding `Annotation*` entities, reading their JSON, projecting them to the screen |
-| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the 30 s run, the 3 s grace. Shared by both minigames |
+| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the run, the 3 s grace. Shared by both minigames |
+| `PostcardAR/Minigame.swift` | The two games' settings: run length and every word the player reads. One block per game |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
 | `PostcardAR/<image name>.json` | Annotation text for that card, if it has any — see `docs/annotations.md` |
@@ -296,10 +297,22 @@ that would have to agree across the reference image *and* the `.usdz`. The game 
 grabbable piece, not once for the app, because the pool is shared across cards and two cards running
 different games can be in frame together.
 
-Both games share `GameSession` unchanged — same phases, same 30 s clock, `+1` a piece — but they
-score at **opposite ends of the gesture**, and that is forced, not stylistic. Removal scores at the
-grab because a grabbed snail always ends up removed; planting scores at the plant because a grabbed
-coral may never reach a point. Full account in `docs/simulation.md`.
+Both games share `GameSession` unchanged — same phases, same clock, `+1` a piece, and both score at
+the moment their gesture actually **succeeds**: a coral when it seats in a plant point, a snail when
+it is let go of clear of the coral rather than put back on it. Nothing is scored at the grab, which
+is only a piece in hand.
+
+What differs between them is settings, not code, and all of it lives in `Minigame.swift`: the run
+length (30 s removal, 45 s planting — carrying a coral to a named slot is the slower gesture) and
+every word on the instructions and result panels. `ContentView` reads that off `game.minigame`, so
+nothing in the UI knows which game is on. Full account in `docs/simulation.md`.
+
+**Clearing the card ends the run on the spot.** `GameSession` is told the run's `target` in
+`begin(_:target:)` — every snail on the card, or the smaller of the corals and plant points — and
+`scored()` goes straight to `finished` on reaching it. Achieving the object of the game is the
+ending; sitting out the rest of the clock with nothing left to pick up is only a wait. The target is
+counted from the model at load time by `PinchInteraction.setup(for:)`, so it stays a property of the
+`.usdz` and no number in the source needs to agree with one in Blender.
 
 The run is a plain state machine in `GameSession.swift`, driven once per rendered frame from
 `onRenderFrame()` and drawn by `runOverlay` in `ContentView.swift`:
@@ -313,7 +326,9 @@ protect but because there is not one yet, so losing the card there calls `reset(
 grace, nothing carried over, the panel goes away with the card and the next card seen starts over.
 That makes an ordering detail load-bearing in `updateGame(cardPresent:candidate:)`: `cardPresent`
 was computed by the card loop before `activeSimulationCard` was claimed, so it reads `false` on the
-claiming frame and must be overridden to `true` there, or `begin()` and `reset()` alternate forever.
+claiming frame and must be overridden to `true` there, or `begin(_:target:)` and `reset()` alternate
+forever. A card only claims the session once `pinch.setup(for:)` answers for it, so a card whose
+model is still loading, or which holds nothing to play with, puts no panel up.
 
 Losing the card mid-*run* splits exactly on the lock. Hand in frame: the model stays, the run does
 not notice. No hand: the model hides and the run freezes for 3 s — score and clock held, the card
@@ -321,9 +336,9 @@ returning inside that window resuming where it left, the window expiring wiping 
 next scan starts from zero. The clock **pauses** rather than draining, because losing the card is
 not the player's doing.
 
-Score is `+1` per snail, counted at the grab rather than the release: a grabbed snail always ends
-up removed, so the grab is where it is committed. That is also why a released snail is hidden and
-not deleted — Play Again restores every snail to the local transform it loaded with. Full account
+Score is `+1` per piece, counted where the gesture succeeds — the plant for a coral, the release
+for a snail that comes off rather than going back on. A released snail is hidden rather than
+deleted, so Play Again can restore every piece to the local transform it loaded with. Full account
 in `docs/simulation.md`.
 
 ## Pinch pickup
@@ -336,7 +351,7 @@ nearest-piece-by-screen-projection within `pinchPickRadius`, not a hit test; a h
 the pinch point at fixed camera depth. All of that is shared by both games.
 
 Release is where they part, on the held piece's own `Grabbable.game`. A **snail** near its home slot
-snaps back and un-scores, otherwise fades and hides for good. A **coral** near a free plant point on
+snaps back and scores nothing, otherwise fades, hides for good and scores. A **coral** near a free plant point on
 its own model seats itself there and scores, taking the point's rotation as well as its position,
 otherwise glides back to where it started — a coral never fades and is never lost, because a model
 ships only so many. A planted coral keeps the `removed` flag from its grab, so it cannot be taken

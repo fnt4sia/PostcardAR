@@ -422,9 +422,13 @@ extension PostcardARView {
         private func updateGame(cardPresent: Bool, candidate: String?) {
             var present = cardPresent
 
-            if activeSimulationCard == nil, let candidate {
+            // A card only claims the session once its model has arrived and turned out to hold
+            // something to play with — `setup(for:)` is `nil` until then. That is what keeps the
+            // instructions panel off a card whose `.usdz` is still loading, and off one that has
+            // neither plant points nor snails (already reported to the status panel).
+            if activeSimulationCard == nil, let candidate, let setup = pinch.setup(for: candidate) {
                 activeSimulationCard = candidate
-                game.begin()
+                game.begin(setup.minigame, target: setup.target)
                 // `cardPresent` was worked out in the card loop above, back when no card was the
                 // active one — so it is `false` on this frame however plainly the card is in
                 // view. `candidate` is only ever set from a *tracked* card, so the card is there.
@@ -518,7 +522,7 @@ extension PostcardARView {
                         // Showcase models are looked at, not touched, so nothing in one ever enters
                         // the grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to
                         // find on one. Which minigame a simulation card runs is read from the
-                        // model's own contents, not from its name; see `PinchInteraction.Minigame`.
+                        // model's own contents, not from its name; see `Minigame.swift`.
                         if card.kind == .simulation {
                             pinch.collect(from: model, named: card.name, report: report)
                         }

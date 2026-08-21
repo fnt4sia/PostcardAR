@@ -76,6 +76,10 @@ private struct ScannerScreen: View {
     // MARK: The run
 
     /// Instructions, countdown, HUD, grace, result — one per phase, and nothing on a showcase card.
+    ///
+    /// Every word and number that differs between the two minigames is read off the run rather than
+    /// written here: the copy from `game.minigame.settings` (see `Minigame.swift`) and the goal from
+    /// `game.target`, which the model itself supplied. Nothing in this file knows which game is on.
     @ViewBuilder
     private var runOverlay: some View {
         switch game.phase {
@@ -85,11 +89,8 @@ private struct ScannerScreen: View {
         case .instructions:
             dimmed {
                 InstructionsPopup(
-                    title: "THE SILENT KILLER",
-                    message: """
-                        Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off.
-                        Clear as many as you can in 30 seconds.
-                        """,
+                    title: game.minigame.settings.title,
+                    message: game.minigame.settings.instructions,
                     action: { game.start() }
                 )
             }
@@ -103,7 +104,7 @@ private struct ScannerScreen: View {
             ZStack(alignment: .top) {
                 if status.handTooClose { tooCloseNotice }
             
-                TimerHUD(secondsRemaining: game.secondsRemaining, current: game.score, total: 8)
+                TimerHUD(secondsRemaining: game.secondsRemaining, current: game.score, total: game.target)
                     .padding(.top, 50)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -130,9 +131,9 @@ private struct ScannerScreen: View {
         case .finished:
             dimmed {
                 FinishScreen(
-                    label: "CLEARED",
+                    label: game.minigame.settings.resultLabel,
                     value: "\(game.score)",
-                    title: "DRUPELLA REMOVED",
+                    title: game.minigame.settings.resultTitle,
                     buttonTitle: "Play Again",
                     action: { game.playAgain() }
                 )
