@@ -2,9 +2,14 @@
 //  PinchInteraction.swift
 //  PostcardAR
 //
-//  The one gesture: pinch to grab a `Drupella*` entity, drag it, let go. Vision reads the same
-//  camera frame ARKit is already tracking cards against, independently and at its own pace — see
-//  docs/interaction.md for the full mechanism.
+//  The one gesture: pinch to grab a piece — a `Drupella*` snail or a `SingleCoral*` — drag it, let
+//  go. Vision reads the same camera frame ARKit is already tracking cards against, independently
+//  and at its own pace — see docs/interaction.md for the full mechanism.
+//
+//  Both minigames share every part of that. Where they differ is what a release means, and that
+//  lives in exactly two places, both switching on the piece in hand (`Grabbable.game`) rather than
+//  on any global mode: `releaseHeld()` and the plant-on-hover branch of `updateDrag()`. Each game's
+//  settings and copy are in `Minigame.swift`.
 //
 //  `PostcardARView.Coordinator` owns one `PinchInteraction` and talks to it through five calls:
 //  `attach(to:)` once at start, `collect(from:named:report:)` once per loaded simulation model,
@@ -248,32 +253,13 @@ struct PinchPointFilter {
 /// sampling, and the haptics. `PostcardARView.Coordinator` holds one and drives it
 /// per frame; see the file header for the full call surface.
 final class PinchInteraction {
-    /// Which minigame a grabbable piece belongs to, and therefore what picking it up and letting go
-    /// of it mean.
-    ///
-    /// Carried per piece rather than held once for the whole type, because the grabbable pool is
-    /// shared across every loaded simulation model and two cards running different games can be in
-    /// frame together. `releaseHeld()` then asks the piece in hand what it is, and never has to know
-    /// which card the run belongs to.
-    ///
-    /// Read from the model's *contents* in `collect(from:)` — a model with `CoralPlantPoint*`
-    /// entities plays the planting game, one with `Drupella*` plays the removal game. Nothing in the
-    /// source names a card, and no second naming rule sits on top of the `Simulation` prefix.
-    enum Minigame {
-        /// Drupella are eating the coral: pinch them off. Scored at the grab, since a grabbed snail
-        /// always ends up removed.
-        case removingDrupella
-
-        /// Corals sit around a structure: pinch them onto its plant points. Scored at the
-        /// *plant*, since a grabbed coral may well not end up planted.
-        case plantingCoral
-    }
-
     /// One grabbable piece — a drupella snail, or a coral waiting to be planted.
     private struct Grabbable {
         let entity: Entity
 
-        /// What game it belongs to, and so what letting go of it does.
+        /// What game it belongs to, and so what letting go of it does. Carried per piece rather
+        /// than held once for the type: the pool is shared across every loaded simulation model,
+        /// and two cards running different games can be in frame together. See `Minigame.swift`.
         let game: Minigame
 
         /// The model it came from. Plant points are matched against this, so a coral can only be
@@ -314,8 +300,9 @@ final class PinchInteraction {
         var plateOpacity: Float = -1
     }
 
-    /// The run. Read for phase gating (grab, snap) and written to for scoring — `scored()` at the
-    /// grab for drupella and at the plant for corals, `unscored()` on a drupella snap-back.
+    /// The run. Read for phase gating (grab, snap) and written to for scoring — `scored()` where
+    /// each game's gesture actually succeeds: `plant(_:in:)` for a coral, `releaseSnail(_:)` for a
+    /// snail that comes off rather than going back on.
     private let game: GameSession
 
     /// `game.phase` as of the previous call to `update()`. A fresh run needs its picked-off
@@ -332,6 +319,11 @@ final class PinchInteraction {
 
     /// Every plant point across every loaded planting model. Empty when no such card is loaded.
     private var plantPoints: [PlantPoint] = []
+
+    /// What each loaded simulation card turned out to be, keyed by card name — filled in
+    /// `collect(from:named:report:)`, read once by the coordinator when a card claims the session.
+    /// A card whose model has not arrived yet, or holds nothing to play with, is simply absent.
+    private var setups: [String: (minigame: Minigame, target: Int)] = [:]
 
     /// The piece being dragged — its index into `grabbables` (so release can reach its `home` and
     /// flip `removed`) — and the camera distance it was grabbed at (held constant for the drag).
@@ -426,6 +418,12 @@ final class PinchInteraction {
     /// Consecutive samples that read as too close — see `handTooCloseConfirmSamples`.
     private var tooCloseStreak = 0
 
+    /// What a card plays and how many pieces finish it, or `nil` if its model has not loaded yet
+    /// or holds nothing to play with. Read by `Coordinator.updateGame(cardPresent:candidate:)` to
+    /// start a run: a card with no answer here does not claim the session, which is what keeps the
+    /// instructions panel off a card that has nothing on it.
+    func setup(for card: String) -> (minigame: Minigame, target: Int)? { setups[card] }
+
     /// Wires up haptics against a live `ARView`. Call once, from `Coordinator.start(in:)`.
     func attach(to arView: ARView) {
         self.arView = arView
@@ -454,7 +452,7 @@ final class PinchInteraction {
 
         let snails = find(prefix: drupellaPrefix, in: model)
         if !snails.isEmpty {
-            collectDrupella(from: model, snails: snails)
+            collectDrupella(from: model, named: name, snails: snails)
             return
         }
 
@@ -465,7 +463,7 @@ final class PinchInteraction {
     }
 
     /// The removal game: every `Drupella*` becomes grabbable where it sits on the coral.
-    private func collectDrupella(from model: Entity, snails: [Entity]) {
+    private func collectDrupella(from model: Entity, named name: String, snails: [Entity]) {
         let (outlines, pickable) = snails.reduce(into: ([Entity](), [Entity]())) { result, entity in
             if entity.name.hasSuffix(outlineSuffix) {
                 result.0.append(entity)
@@ -486,6 +484,8 @@ final class PinchInteraction {
         grabbables.append(contentsOf: pickable.map {
             Grabbable(entity: $0, game: .removingDrupella, model: model, home: $0.transform)
         })
+        // Every snail on the card: clearing them all is what ends the run early.
+        setups[name] = (.removingDrupella, pickable.count)
     }
 
     /// The planting game: the plant points are registered and hidden, and every `SingleCoral*` is
@@ -526,6 +526,10 @@ final class PinchInteraction {
         grabbables.append(contentsOf: corals.map {
             Grabbable(entity: $0, game: .plantingCoral, model: model, home: $0.transform)
         })
+        // The smaller of the two, not the number of slots: a board shipping fewer corals than
+        // points can never fill them all, and a target that cannot be reached would never end the
+        // run early — the mismatch is already reported above.
+        setups[name] = (.plantingCoral, min(corals.count, points.count))
     }
 
     /// Breathes the plate on every free slot, and holds the one a held coral would drop into solid.
@@ -941,15 +945,9 @@ final class PinchInteraction {
         setDrawsInFront(true, on: piece)
         pinchHaptics?.impactOccurred()
 
-        // Removal scores at the grab, not the release: a grabbed snail always ends up removed, so
-        // this is the moment it is committed. `releaseHeld()` can still undo it if the release
-        // turns out to be a snap-back rather than a pick.
-        //
-        // Planting cannot do that. A grabbed coral is only a coral in hand — it scores when it
-        // actually lands on a plant point, which may never happen.
-        if grabbables[index].game == .removingDrupella {
-            game.scored()
-        }
+        // Nothing is scored here, in either game. A grab is a piece in hand and no more: a coral
+        // may never reach a plant point, and a snail may be put straight back on the coral. Both
+        // games score where their gesture actually succeeds — `plant(_:in:)` and `releaseSnail(_:)`.
     }
 
     /// Moves the held snail to the last pinch point every rendered frame — same idiom as
@@ -978,7 +976,9 @@ final class PinchInteraction {
         }
     }
 
-    /// Seats a coral in a slot: out of the hand, out of play, scored.
+    /// Seats a coral in a slot: out of the hand, out of play, scored. This is the planting game's
+    /// one scoring point — the moment the gesture actually succeeds, the same way `releaseSnail(_:)`
+    /// is the removal game's.
     ///
     /// The coral takes the slot's position and rotation but keeps its own scale — a plant point
     /// authored as a cube shrunk to 10% carries that scale, and adopting it would shrink the coral
@@ -1029,12 +1029,7 @@ final class PinchInteraction {
         }
     }
 
-    /// Lets go of the held snail. Close enough to its home slot, and the run hasn't ended out
-    /// from under it, reads as "put back" rather than "collected": it glides home via
-    /// RealityKit's own move animation, un-scores, and clears `removed` — same conditions
-    /// `attemptGrab(at:)` requires for a *grab*, so an undo can't outlive the run any more
-    /// than a pick can start after it. Otherwise it moves into `fading` as before, staying
-    /// `removed` and keeping the point until `restoreAll()` puts it back for the next run.
+    /// Lets go of the held piece, into whichever release rule its game has.
     private func releaseHeld() {
         guard let (index, _) = held else { return }
         held = nil
@@ -1048,9 +1043,17 @@ final class PinchInteraction {
     }
 
     /// A snail let go of. Near enough its home slot, and with the run still live, that reads as
-    /// "put back" rather than "collected": it glides home, un-scores, and returns to play — the same
-    /// conditions `attemptGrab(at:)` needs for a grab, so an undo cannot outlive the run any more
-    /// than a pick can start after it. Otherwise it fades out and stays out.
+    /// "put back" rather than "collected": it glides home and returns to play, scoring nothing.
+    /// Otherwise it fades out, stays out, and **this** is where the removal game scores.
+    ///
+    /// Scoring here rather than at the grab is what makes the point mean what it says: the snail
+    /// has left the coral. A grab is only a snail in hand, and the player may well put it straight
+    /// back — which used to score and then un-score, a point appearing and vanishing for a gesture
+    /// that achieved nothing.
+    ///
+    /// The score is gated on `phase == .playing` inside `GameSession.scored()`, so a snail still in
+    /// hand when the buzzer goes — `update()` drops it the moment the phase leaves `playing` —
+    /// fades away without counting, the same as one released after the run ended.
     private func releaseSnail(_ index: Int) {
         let entity = grabbables[index].entity
 
@@ -1064,10 +1067,10 @@ final class PinchInteraction {
             entity.move(to: grabbables[index].home, relativeTo: entity.parent,
                         duration: pinchSnapDuration)
             grabbables[index].removed = false
-            game.unscored()
             snapHaptics?.notificationOccurred(.success)
         } else {
             fading.append((entity, 1))
+            game.scored()
             pinchHaptics?.impactOccurred(intensity: 0.4) // softer than the grab: this end is expected
         }
     }

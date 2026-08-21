@@ -202,9 +202,9 @@ passes `cardPresent: visible` here as everywhere else — the occlusion lock cou
 
 That is the `updateGame(cardPresent:candidate:)` ordering trap, and it means the override on the
 claiming frame has been removed. `cardPresent` is computed by the card loop *before*
-`activeSimulationCard` is claimed, so it is `false` on the frame `begin()` runs; passed through as
+`activeSimulationCard` is claimed, so it is `false` on the frame `begin(_:target:)` runs; passed through as
 `false`, the fresh `instructions` phase is `reset()` back to `idle` on that same frame, and
-`begin()`/`reset()` alternate forever. The claim branch must force it `true` — `candidate` is only
+`begin(_:target:)`/`reset()` alternate forever. The claim branch must force it `true` — `candidate` is only
 ever set from a tracked card, so the card is provably there.
 
 ### The run restarted from zero when I looked away

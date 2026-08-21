@@ -6,11 +6,11 @@ Hold a card up, move it, tilt it — its model stays attached.
 Cards come in two kinds, decided by the front of the card's name:
 
 - **Showcase** — the model is there to be looked at. Nothing to do.
-- **Simulation** — a minigame runs on it. Drupella snails are eating the coral; pinch them off,
-  as many as you can in 30 seconds.
+- **Simulation** — a minigame runs on it. Pinch drupella snails off the coral in 30 seconds, or
+  plant corals onto a biorock frame in 45. Clear the card and the run ends there and then.
 
 Everything is first-party Apple: SwiftUI for the shell, ARKit for tracking, RealityKit for
-rendering, Vision for the pinch gesture. No third-party dependencies, no package manager, four
+rendering, Vision for the pinch gesture. No third-party dependencies, no package manager, seven
 Swift files.
 
 ## Requirements
@@ -52,6 +52,9 @@ PostcardAR/
 ```
 
 1. **Print the card**, and photograph it flat on, evenly lit, no glare, cropped to its edges.
+   Export it at roughly **1400px on the long edge** — ARKit gains nothing above that, and a
+   print-resolution image costs seconds of loading and hundreds of megabytes to decode. See
+   [docs/reference-images.md](docs/reference-images.md).
 2. **Add the image.** In `Assets.xcassets`, select **AR Resources**, drag the image in, and name
    the entry after the model it should show — prefixed `Simulation` if it should run the minigame,
    `Showcase` otherwise. (Only `Simulation` is tested for; any other prefix, or none, is a
@@ -127,6 +130,8 @@ while a hand is in frame keeps its model locked in place until the hand leaves �
 | `PostcardAR/PinchInteraction.swift` | Pinch pickup and both minigames' grab/release rules |
 | `PostcardAR/Annotations.swift` | Explanation labels and the JSON behind them |
 | `PostcardAR/GameSession.swift` | The run's phases, score, and clocks, shared by both minigames |
+| `PostcardAR/Minigame.swift` | Each game's run length and on-screen words — one block per game |
+| `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world size |
 | `PostcardAR/<name>.usdz` | The model for the card of that name |
 | `PostcardAR/<name>.json` | Annotation text for that card, if it has any |
@@ -159,8 +164,11 @@ own printed size, smoothed so it does not shiver, and drawn only once its own ca
 tracked — scanning one card never brings another card's model with it. Hands occlude the models
 properly (ARKit people occlusion, A12 and later).
 
-Simulation cards run the full loop: instructions, a 3 · 2 · 1, thirty seconds of play with the score
-and clock on screen, then a result with **Play Again**. A card lost while a hand is in frame locks
+Simulation cards run the full loop: instructions, a 3 · 2 · 1, a timed spell of play with the score
+and clock on screen, then a result with **Play Again**. How long that spell is, and every word on
+the instructions and result panels, come from the game being played — see
+[`Minigame.swift`](PostcardAR/Minigame.swift), one block per game. Clearing every piece on the card
+ends the run immediately rather than leaving the clock to run down. A card lost while a hand is in frame locks
 its model in place instead of blinking it out, so reaching into the scene does not make what you are
 reaching for disappear, and the run carries on. A card lost with no hand freezes the run for five
 seconds before wiping it — see [docs/simulation.md](docs/simulation.md).
@@ -182,10 +190,8 @@ Not implemented:
 - **More than one run at a time.** The first simulation card tracked claims the session; a second
   one in frame is only a model. A second run would need a second HUD, so the shape to reach for
   would be a session per card.
-- **A completion ending for PlantingCoral.** Filling every plant point does not end the run early —
-  the 30 s clock always runs out first, exactly as in the removal game.
-- **Un-planting.** A planted coral is committed and cannot be picked back up, so `unscored()` is
-  used only by the removal game's put-back.
+- **Un-planting.** A planted coral is committed and cannot be picked back up. Neither is a removed
+  snail, so nothing ever takes a point back off the board — a put-back simply never scored one.
 - **Pinch gestures on anything but `Drupella*` entities** (scaling or spinning the model itself,
   say). If added, write to the model entity or a second pivot — never to the anchor, and not to
   the existing pivot, whose world transform is rewritten every frame.

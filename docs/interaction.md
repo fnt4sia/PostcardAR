@@ -183,9 +183,9 @@ point at constant distance, rather than sliding toward or away from the camera.
 
 *A snail* is first checked for being a put-back: close enough to its `home` slot
 (`pinchSnapRadius`) and the run still `.playing`. If so it glides home via
-`Entity.move(to:relativeTo:duration:)`, reverses the score, and clears `removed` — see "Scoring,
-and putting the pieces back" in [simulation.md](simulation.md) for the full undo path. Otherwise
-it moves the entity into `fading` rather than deleting it immediately: `updateFading()` steps
+`Entity.move(to:relativeTo:duration:)` and clears `removed`, scoring nothing — see "Scoring, and
+putting the pieces back" in [simulation.md](simulation.md). Otherwise it scores, and moves the
+entity into `fading` rather than deleting it immediately: `updateFading()` steps
 its opacity down by `pinchFadeStep` each frame and **hides** it at zero — a plain per-frame loop
 rather than `AnimationResource`, since the render loop is already iterating every frame regardless.
 
@@ -206,7 +206,7 @@ a model ships only so many, so a fumbled release must not be able to run a board
 Hidden, not `removeFromParent()`: Play Again needs the same snails back on the same coral, and
 keeping them in the tree makes that a transform reset rather than a second load of a model already
 in memory. Each one carries the local transform it loaded with, and `restoreAll()` puts it back
-— see "Scoring, and putting the snails back" in [simulation.md](simulation.md).
+— see "Scoring, and putting the pieces back" in [simulation.md](simulation.md).
 
 **Forced release.** If a pinch is closed and Vision stops confidently seeing a hand for
 `handPoseLossTimeout`, the snail releases anyway — a hand that lifts out of frame mid-grab would
@@ -218,9 +218,10 @@ would stay stuck held forever.
 up through the camera image. It also skips snails already marked `removed`, so a fading snail
 cannot be re-grabbed on its way out.
 
-**Scoring happens at the grab, not the release** — unless the release turns out to be a put-back,
-in which case it is reversed. See "Scoring, and putting the snails back" in
-[simulation.md](simulation.md).
+**Scoring happens where the gesture succeeds, never at the grab** — the plant for a coral, the
+release for a snail that comes off rather than going back on. A grab is only a piece in hand, so
+nothing is committed there and nothing ever has to be taken back. Reaching the run's target ends it
+on the spot. See "Scoring, and putting the pieces back" in [simulation.md](simulation.md).
 
 ## A held piece draws over the hand holding it
 
@@ -368,7 +369,7 @@ One walk, reused for all four prefixes — `Drupella`, `CoralPlantPoint`, `Singl
 `collect(from:named:report:)` runs it first for `CoralPlantPoint` and, finding none, for `Drupella`,
 which is how a model declares which minigame it is — see [simulation.md](simulation.md).
 
-Called once per **simulation** model from `loadModels()` in `PostcardARView.swift`, **before**
+Called once per **simulation** model from `attachModels()` in `PostcardARView.swift`, **before**
 `fit(_:named:)` — the coordinator crossing into `PinchInteraction` is the one place model loading
 and pinch pickup actually touch. Nothing is repositioned here: both games take every piece exactly
 where the model left it.

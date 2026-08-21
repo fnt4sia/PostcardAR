@@ -63,11 +63,14 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 
 | Path | Purpose |
 |---|---|
-| `PostcardAR/ContentView.swift` | Start button, the camera screen's status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
+| `PostcardAR/ContentView.swift` | Start button, the loading/camera swap, the status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
+| `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan. Owns `fit`, `removeCameras`, `modelWidths` |
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
 | `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — the grabbable pool, both minigames' grab/release rules, hand-pose sampling, haptics |
 | `PostcardAR/Annotations.swift` | Explanation labels: finding `Annotation*` entities, reading their JSON, projecting them to the screen |
-| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the 30 s run, the 3 s grace. Shared by both minigames |
+| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the run, the 3 s grace. Shared by both minigames |
+| `PostcardAR/Minigame.swift` | The two games' settings: run length and every word the player reads. One block per game |
+| `PostcardAR/Views/` | The Figma-traced screens — home, loading, instructions, countdown, HUD, result — and `DesignTokens` |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
 | `PostcardAR/<image name>.json` | Annotation text for that card, if it has any — see `docs/annotations.md` |
@@ -296,10 +299,22 @@ that would have to agree across the reference image *and* the `.usdz`. The game 
 grabbable piece, not once for the app, because the pool is shared across cards and two cards running
 different games can be in frame together.
 
-Both games share `GameSession` unchanged — same phases, same 30 s clock, `+1` a piece — but they
-score at **opposite ends of the gesture**, and that is forced, not stylistic. Removal scores at the
-grab because a grabbed snail always ends up removed; planting scores at the plant because a grabbed
-coral may never reach a point. Full account in `docs/simulation.md`.
+Both games share `GameSession` unchanged — same phases, same clock, `+1` a piece, and both score at
+the moment their gesture actually **succeeds**: a coral when it seats in a plant point, a snail when
+it is let go of clear of the coral rather than put back on it. Nothing is scored at the grab, which
+is only a piece in hand.
+
+What differs between them is settings, not code, and all of it lives in `Minigame.swift`: the run
+length (30 s removal, 45 s planting — carrying a coral to a named slot is the slower gesture) and
+every word on the instructions and result panels. `ContentView` reads that off `game.minigame`, so
+nothing in the UI knows which game is on. Full account in `docs/simulation.md`.
+
+**Clearing the card ends the run on the spot.** `GameSession` is told the run's `target` in
+`begin(_:target:)` — every snail on the card, or the smaller of the corals and plant points — and
+`scored()` goes straight to `finished` on reaching it. Achieving the object of the game is the
+ending; sitting out the rest of the clock with nothing left to pick up is only a wait. The target is
+counted from the model at load time by `PinchInteraction.setup(for:)`, so it stays a property of the
+`.usdz` and no number in the source needs to agree with one in Blender.
 
 The run is a plain state machine in `GameSession.swift`, driven once per rendered frame from
 `onRenderFrame()` and drawn by `runOverlay` in `ContentView.swift`:
@@ -313,7 +328,9 @@ protect but because there is not one yet, so losing the card there calls `reset(
 grace, nothing carried over, the panel goes away with the card and the next card seen starts over.
 That makes an ordering detail load-bearing in `updateGame(cardPresent:candidate:)`: `cardPresent`
 was computed by the card loop before `activeSimulationCard` was claimed, so it reads `false` on the
-claiming frame and must be overridden to `true` there, or `begin()` and `reset()` alternate forever.
+claiming frame and must be overridden to `true` there, or `begin(_:target:)` and `reset()` alternate
+forever. A card only claims the session once `pinch.setup(for:)` answers for it, so a card whose
+model is still loading, or which holds nothing to play with, puts no panel up.
 
 Losing the card mid-*run* splits exactly on the lock. Hand in frame: the model stays, the run does
 not notice. No hand: the model hides and the run freezes for 3 s — score and clock held, the card
@@ -321,9 +338,9 @@ returning inside that window resuming where it left, the window expiring wiping 
 next scan starts from zero. The clock **pauses** rather than draining, because losing the card is
 not the player's doing.
 
-Score is `+1` per snail, counted at the grab rather than the release: a grabbed snail always ends
-up removed, so the grab is where it is committed. That is also why a released snail is hidden and
-not deleted — Play Again restores every snail to the local transform it loaded with. Full account
+Score is `+1` per piece, counted where the gesture succeeds — the plant for a coral, the release
+for a snail that comes off rather than going back on. A released snail is hidden rather than
+deleted, so Play Again can restore every piece to the local transform it loaded with. Full account
 in `docs/simulation.md`.
 
 ## Pinch pickup
@@ -336,7 +353,7 @@ nearest-piece-by-screen-projection within `pinchPickRadius`, not a hit test; a h
 the pinch point at fixed camera depth. All of that is shared by both games.
 
 Release is where they part, on the held piece's own `Grabbable.game`. A **snail** near its home slot
-snaps back and un-scores, otherwise fades and hides for good. A **coral** near a free plant point on
+snaps back and scores nothing, otherwise fades, hides for good and scores. A **coral** near a free plant point on
 its own model seats itself there and scores, taking the point's rotation as well as its position,
 otherwise glides back to where it started — a coral never fades and is never lost, because a model
 ships only so many. A planted coral keeps the `removed` flag from its grab, so it cannot be taken
@@ -382,7 +399,7 @@ Full mechanism, including the open/close debounce and the Vision coordinate-spac
 Anchoring does not scale. A `.usdz` renders at whatever real-world size it was authored at,
 regardless of how big its card is. So each model is measured with `visualBounds` at load time and
 scaled to a fixed target width in metres, looked up by card name in `modelWidths` (falling back
-to `defaultModelWidth`) — see `fit(_:named:)`. Deliberately not derived from the card's own
+to `defaultModelWidth`) — see `fit(_:named:)` in `ModelLibrary.swift`. Deliberately not derived from the card's own
 printed width: that field is what ARKit tracks against, and coupling model size to it would mean
 two differently-sized cards could never carry equally-sized models. This keeps the model's
 authored scale irrelevant, and each card's on-screen size is one tunable number.
@@ -396,7 +413,7 @@ sized is the arrangement that ends up on screen.
 A `.usdz` from Blender contains the lighting rig and the viewport camera, not just the mesh.
 RealityKit turns a USD `Camera` prim into a real `PerspectiveCamera` entity, and adding one to
 an `ARView` scene hands rendering to it — **the passthrough camera freezes**, with no error and
-nothing in the log. `removeCameras(from:)` strips them at load time; do not remove that call.
+nothing in the log. `ModelLibrary.removeCameras(from:)` strips them at load time; do not remove that call.
 
 Imported lights come in as inert entities and are left alone.
 
@@ -404,13 +421,35 @@ Diagnose an imported asset by walking the loaded entity tree and printing compon
 than by reading the file size — the shipped coral is 9 MB and froze the camera, while a 52 MB
 model did not.
 
+## Loading, and where it happens
+
+**Nothing loads inside the camera screen.** `ModelLibrary` reads the reference images and every
+model once per launch, behind `LoadingView`, and `Coordinator.start(in:)` only clones what is
+already there. Three things forced that shape, and undoing any of them brings back a hang:
+
+1. `ARReferenceImage.referenceImages(inGroupNamed:)` is synchronous and decodes every card image
+   in the group to full-size RGBA. Called from `makeUIView` — which is where it used to be — it
+   blocks the presentation of the camera screen. It now runs in a detached task.
+2. **Reference images have a resolution ceiling.** ARKit gains nothing above ~1800px on the long
+   edge; the two cards once shipped at 5855 × 7605, which is 356 MB of bitmap to decode before the
+   camera could appear. See "Resolution" in `docs/reference-images.md`.
+3. `ScannerScreen` lives in a `fullScreenCover`, so it and its coordinator are destroyed on
+   dismiss. The library is `@State` on `ContentView`, one level *above* the cover, which is what
+   makes it survive — put it inside and every scan reloads everything, as it once did.
+
+`model(named:)` hands out `clone(recursive:)` rather than the model itself. A scan mutates what it
+is given — corals get planted, snails get hidden, annotation markers lose their geometry — and
+`PinchInteraction` reads each piece's *current* transform as the `home` it restores to, so reusing
+one tree would record a planted coral's slot as its home. Clones share `MeshResource` and
+materials, so nothing is re-uploaded.
+
 ## Model weight
 
 Everything runs on the main thread alongside ARKit and SwiftUI, so a heavy `.usdz` stalls the
 camera rather than degrading gracefully. Budget **512×512 textures** and **under ~50k
-triangles**, and note that the budget is now shared: every card's model is loaded at launch and
-stays resident, so ten cards means ten models in memory. Models load one after another rather
-than concurrently — decoding is main-thread work either way, so overlapping them only makes a
+triangles**, and note that the budget is shared: every card's model is loaded at launch and stays
+resident, so ten cards means ten models in memory. Models load one after another rather than
+concurrently — decoding is main-thread work either way, so overlapping them only makes a
 longer stall. File size is not the measure — a `.usdz` is a zip of uncompressed assets, and a
 2048² texture costs ~21 MB of GPU memory with mipmaps however well its PNG compressed. See
 "Weight" in `docs/models.md` for how to check and reduce an asset.

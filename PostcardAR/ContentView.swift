@@ -10,12 +10,26 @@ import SwiftUI
 struct ContentView: View {
     @State private var isScanning = false
 
+    /// Owned here, *above* the `fullScreenCover`, so it outlives the camera screen. That is the
+    /// whole cache: dismissing the scanner tears down its `Coordinator` and its `ARView`, and the
+    /// library — reference images and models both — survives to be reused by the next scan.
+    @State private var library = ModelLibrary()
+
     var body: some View {
-        HomeView(action: { isScanning = true })
-            .fullScreenCover(isPresented: $isScanning) {
-                ScannerScreen()
+        HomeView(action: {
+            isScanning = true
+            // Returns immediately once the library is loaded, which is why only the first scan of
+            // a launch ever sees `LoadingView`.
+            Task { await library.load() }
+        })
+        .fullScreenCover(isPresented: $isScanning) {
+            if library.isReady {
+                ScannerScreen(library: library)
                     .onDisappear { isScanning = false }
+            } else {
+                LoadingView(loaded: library.loaded, total: library.total)
             }
+        }
     }
 }
 
@@ -26,13 +40,16 @@ struct ContentView: View {
 /// view to changes in that property. `game` also flows the other way, since Start and Play Again
 /// are buttons; the coordinator notices those by watching the phase change, not by being called.
 private struct ScannerScreen: View {
+    /// Loaded before this screen was built — see `ModelLibrary`.
+    let library: ModelLibrary
+
     @Environment(\.dismiss) private var dismiss
     @State private var status = ARStatus()
     @State private var game = GameSession()
     @State private var annotations = AnnotationLayer()
 
     var body: some View {
-        PostcardARView(status: status, game: game, annotations: annotations)
+        PostcardARView(status: status, game: game, annotations: annotations, library: library)
             .ignoresSafeArea()
             .overlay(alignment: .topLeading) { annotationLayer }
 
@@ -76,6 +93,10 @@ private struct ScannerScreen: View {
     // MARK: The run
 
     /// Instructions, countdown, HUD, grace, result — one per phase, and nothing on a showcase card.
+    ///
+    /// Every word and number that differs between the two minigames is read off the run rather than
+    /// written here: the copy from `game.minigame.settings` (see `Minigame.swift`) and the goal from
+    /// `game.target`, which the model itself supplied. Nothing in this file knows which game is on.
     @ViewBuilder
     private var runOverlay: some View {
         switch game.phase {
@@ -85,11 +106,8 @@ private struct ScannerScreen: View {
         case .instructions:
             dimmed {
                 InstructionsPopup(
-                    title: "THE SILENT KILLER",
-                    message: """
-                        Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off.
-                        Clear as many as you can in 30 seconds.
-                        """,
+                    title: game.minigame.settings.title,
+                    message: game.minigame.settings.instructions,
                     action: { game.start() }
                 )
             }
@@ -103,7 +121,7 @@ private struct ScannerScreen: View {
             ZStack(alignment: .top) {
                 if status.handTooClose { tooCloseNotice }
             
-                TimerHUD(secondsRemaining: game.secondsRemaining, current: game.score, total: 8)
+                TimerHUD(secondsRemaining: game.secondsRemaining, current: game.score, total: game.target)
                     .padding(.top, 50)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -130,9 +148,9 @@ private struct ScannerScreen: View {
         case .finished:
             dimmed {
                 FinishScreen(
-                    label: "CLEARED",
+                    label: game.minigame.settings.resultLabel,
                     value: "\(game.score)",
-                    title: "DRUPELLA REMOVED",
+                    title: game.minigame.settings.resultTitle,
                     buttonTitle: "Play Again",
                     action: { game.playAgain() }
                 )
