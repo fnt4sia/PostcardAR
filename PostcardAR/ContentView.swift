@@ -115,21 +115,11 @@ private struct ScannerScreen: View {
 
         case .grace:
             dimmed {
-                VStack(spacing: 12) {
-                    Image(systemName: "viewfinder")
-                        .font(.system(size: 44))
-                        .symbolEffect(.pulse)
-                    Text("Point at the card again")
-                        .font(.title3.weight(.semibold))
-                    Text("\(game.graceSecondsRemaining)")
-                        .font(.system(size: 64, weight: .bold, design: .rounded))
-                        .contentTransition(.numericText(countsDown: true))
-                        .animation(.snappy, value: game.graceSecondsRemaining)
-                    Text("Your score and time are held until this reaches zero.")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-                .padding(32)
+                GraceCard(
+                    title: "POINT AT THE CARD AGAIN",
+                    message: "Your score and time are held until this reaches zero.",
+                    secondsRemaining: game.graceSecondsRemaining
+                )
             }
 
         case .finished:
