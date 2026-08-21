@@ -36,8 +36,6 @@ struct FinishScreen: View {
                     .foregroundStyle(DesignTokens.blackText)
                     .padding(.top, 8)
 
-                // Sizing/background inside the label, not chained onto the Button — see
-                // InstructionsPopup's comment on the same pattern.
                 Button(action: action) {
                     Text(buttonTitle)
                         .font(.custom("InterVariable", size: 18))
@@ -61,6 +59,6 @@ struct FinishScreen: View {
 #Preview {
     ZStack {
         Color(hex: 0x081A49).ignoresSafeArea()
-        FinishScreen(label: "CLEARED", value: "8/8", title: "DRUPELLA REMOVED")
+        FinishScreen(label: "CLEARED", value: "8", title: "DRUPELLA REMOVED")
     }
 }

@@ -28,22 +28,19 @@ struct InstructionsPopup: View {
     }
 
     private var content: some View {
-        VStack(spacing: 24) {
-            VStack(spacing: 18) {
+        VStack(spacing: 15) {
+            VStack(spacing: 15) {
                 Text(title)
                     .font(.custom("JetBrainsMono-Bold", size: 34))
                     .multilineTextAlignment(.center)
+                    .foregroundStyle(DesignTokens.whiteText)
                 Text(message)
                     .font(.custom("InterVariable", size: 18))
                     .multilineTextAlignment(.center)
+                    .foregroundStyle(DesignTokens.blueText)
             }
-            .foregroundStyle(DesignTokens.whiteText)
+            
 
-            // Sizing/background live INSIDE the label, not chained onto the Button — a Button's
-            // tap gesture is attached to configuration.label (what ButtonStyle draws), so
-            // anything chained after the Button only changes layout/paint, never the hit region.
-            // Chained outside, this pill's tappable area was just the word "Start" (~40×22pt)
-            // centered in a 266×44pt capsule — the rest of the pill was dead. See DesignTokens.
             Button(action: action) {
                 Text(buttonTitle)
                     .font(.custom("InterVariable", size: 18))
@@ -66,7 +63,7 @@ struct InstructionsPopup: View {
             title: "THE SILENT KILLER",
             message: """
                 Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off.
-                Clear as many as you can in 30 seconds.
+                
                 """
         )
     }

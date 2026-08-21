@@ -8,9 +8,6 @@ import SwiftUI
 
 struct CountdownCard: View {
     var number: Int
-
-    // A brief scale kick each time `number` changes, on top of the digit roll below — makes
-    // each second land rather than just replacing the last one.
     @State private var pulsed = false
 
     private let cardSize = CGSize(width: 282.099, height: 360.018)

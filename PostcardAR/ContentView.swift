@@ -93,7 +93,7 @@ private struct ScannerScreen: View {
                     title: "THE SILENT KILLER",
                     message: """
                         Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off.
-                        Clear as many as you can in 30 seconds.
+                        
                         """,
                     action: { game.start() }
                 )

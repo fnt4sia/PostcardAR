@@ -9,6 +9,7 @@ import CoreText
 enum DesignTokens {
     static let whiteText = Color("WhiteText")
     static let blackText = Color("BlackText")
+    static let blueText = Color("BlueText")
     static let secondaryBlue = Color("SecondaryBlue")
     static let primaryBlue = Color("PrimaryBlue")
     static let buttonBorder = Color(hex: 0xB7FBFF)
@@ -37,9 +38,6 @@ extension Color {
     }
 }
 
-/// Shared press feedback for every pill button and the X close button — a small scale-down
-/// while held, spring back on release. One definition so every button in the app presses the
-/// same way rather than each screen inventing its own.
 struct PressableButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

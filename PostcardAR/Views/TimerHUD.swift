@@ -54,34 +54,6 @@ struct TimerHUD: View {
     }
 }
 
-// DEBUG PREVIEW ONLY
-private struct TimerHUDDebugPreview: View {
-    @State private var current = 3
-    private let total = 8
-
-    var body: some View {
-        ZStack(alignment: .top) {
-            Color(hex: 0x081A49).ignoresSafeArea()
-            TimerHUD(secondsRemaining: 30, current: current, total: total)
-                .padding(.top, 86)
-
-            VStack {
-                Spacer()
-                HStack(spacing: 16) {
-                    Button("-1") { current = max(0, current - 1) }
-                    Button("+1") { current = min(total, current + 1) }
-                }
-                .buttonStyle(.borderedProminent)
-                .padding(.bottom, 40)
-            }
-        }
-    }
-}
-
-#Preview {
-    TimerHUDDebugPreview()
-}
-
 #Preview {
     ZStack {
         Color(hex: 000000).ignoresSafeArea()
