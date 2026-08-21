@@ -369,7 +369,16 @@ extension PostcardARView {
                 // Simulation cards only. The lock exists so that reaching into the scene does not
                 // delete the thing you are reaching for; a showcase card has nothing to reach for,
                 // so it hides the moment its card leaves and never lingers under a passing hand.
-                let visible = tracked || (cards[index].pivot.isEnabled && handInFrame && isSimulation)
+                //
+                // `.instructions` gets an exemption from the hand requirement, for this card only:
+                // nothing hand-related happens on that screen — the player is just reading, not
+                // reaching — so `handInFrame` is almost never true there, and without this the
+                // lock never engages, leaving GameSession's own `.instructions` case exposed to
+                // every single tracking dropout with nothing softening it. Scoped to
+                // `activeSimulationCard` so a second, unrelated simulation card in frame doesn't
+                // also get held up by this.
+                let instructionsExempt = game.phase == .instructions && cards[index].name == activeSimulationCard
+                let visible = tracked || (cards[index].pivot.isEnabled && (handInFrame || instructionsExempt) && isSimulation)
                 if cards[index].pivot.isEnabled != visible {
                     cards[index].pivot.isEnabled = visible
                 }

@@ -39,14 +39,22 @@ struct InstructionsPopup: View {
             }
             .foregroundStyle(DesignTokens.whiteText)
 
-            Button(buttonTitle, action: action)
-                .font(.custom("InterVariable", size: 18))
-                .foregroundStyle(DesignTokens.whiteText)
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
-                .background(Capsule().fill(DesignTokens.secondaryBlue))
-                .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
-                .buttonStyle(PressableButtonStyle())
+            // Sizing/background live INSIDE the label, not chained onto the Button — a Button's
+            // tap gesture is attached to configuration.label (what ButtonStyle draws), so
+            // anything chained after the Button only changes layout/paint, never the hit region.
+            // Chained outside, this pill's tappable area was just the word "Start" (~40×22pt)
+            // centered in a 266×44pt capsule — the rest of the pill was dead. See DesignTokens.
+            Button(action: action) {
+                Text(buttonTitle)
+                    .font(.custom("InterVariable", size: 18))
+                    .foregroundStyle(DesignTokens.whiteText)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(Capsule().fill(DesignTokens.secondaryBlue))
+                    .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(PressableButtonStyle())
         }
     }
 }

@@ -36,15 +36,20 @@ struct FinishScreen: View {
                     .foregroundStyle(DesignTokens.blackText)
                     .padding(.top, 8)
 
-                Button(buttonTitle, action: action)
-                    .font(.custom("InterVariable", size: 18))
-                    .foregroundStyle(DesignTokens.whiteText)
-                    .padding(.horizontal, 20)
-                    .frame(height: 44)
-                    .background(Capsule().fill(DesignTokens.secondaryBlue))
-                    .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
-                    .buttonStyle(PressableButtonStyle())
-                    .padding(.top, 16)
+                // Sizing/background inside the label, not chained onto the Button — see
+                // InstructionsPopup's comment on the same pattern.
+                Button(action: action) {
+                    Text(buttonTitle)
+                        .font(.custom("InterVariable", size: 18))
+                        .foregroundStyle(DesignTokens.whiteText)
+                        .padding(.horizontal, 20)
+                        .frame(height: 44)
+                        .background(Capsule().fill(DesignTokens.secondaryBlue))
+                        .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(PressableButtonStyle())
+                .padding(.top, 16)
             }
             .multilineTextAlignment(.center)
             .padding(.top, 117)

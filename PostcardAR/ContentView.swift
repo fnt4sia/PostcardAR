@@ -37,7 +37,9 @@ private struct ScannerScreen: View {
             .overlay(alignment: .topLeading) { annotationLayer }
 
             .overlay(alignment: .topLeading) {
-                if game.phase != .finished {
+                // Hidden on .countdown too — 3·2·1 shouldn't be interruptible any more than the
+                // result screen is.
+                if game.phase != .finished && game.phase != .countdown {
                     Button {
                         dismiss()
                     } label: {
@@ -51,7 +53,6 @@ private struct ScannerScreen: View {
                 }
             }
             .overlay { runOverlay }
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: game.phase)
     }
 
     // MARK: Annotations
@@ -159,12 +160,25 @@ private struct ScannerScreen: View {
     /// Every full-screen run panel sits on the same dimmed backdrop.
     private func dimmed(@ViewBuilder content: () -> some View) -> some View {
         ZStack {
+            // Its own .opacity-only transition — never .scale. A scale transition applies a
+            // geometric transform to the whole already-laid-out subtree, and this rectangle is
+            // full-bleed (.ignoresSafeArea()), so scaling it shrinks the entire black backdrop
+            // toward its center mid-animation, briefly exposing the camera at the edges. That was
+            // the "black overlay glitches and becomes too small" bug — the backdrop was caught in
+            // the same scale meant only for the card.
             Color.black.opacity(0.65)
                 .ignoresSafeArea()
+                .transition(.opacity)
             content()
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
         }
         .foregroundStyle(.white)
-        .transition(.scale(scale: 0.9).combined(with: .opacity))
+        // Scoped here, not at the top of ScannerScreen.body: an .animation(value:) that high
+        // wraps every button underneath — including the X button's own press-state — in one
+        // ambient spring transaction, which is what made Start need a second tap to register.
+        // Keeping it local to this helper means only a dimmed() panel's own appear/disappear
+        // animates; nothing else's gestures get caught in it.
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: game.phase)
     }
 
     // MARK: Status

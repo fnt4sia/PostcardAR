@@ -67,14 +67,20 @@ struct HomeView: View {
                     .multilineTextAlignment(.center)
                     .foregroundStyle(DesignTokens.blackText)
             }
-            Button("Scan a Card", action: action)
-                .font(.custom("InterVariable", size: 18))
-                .foregroundStyle(DesignTokens.whiteText)
-                .padding(.horizontal, 20)
-                .frame(height: 44)
-                .background(Capsule().fill(DesignTokens.secondaryBlue))
-                .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
-                .buttonStyle(PressableButtonStyle())
+            // Sizing/background inside the label, not chained onto the Button — see
+            // InstructionsPopup's comment on the same pattern; chained outside, only the text
+            // glyphs were tappable, not the pill.
+            Button(action: action) {
+                Text("Scan a Card")
+                    .font(.custom("InterVariable", size: 18))
+                    .foregroundStyle(DesignTokens.whiteText)
+                    .padding(.horizontal, 20)
+                    .frame(height: 44)
+                    .background(Capsule().fill(DesignTokens.secondaryBlue))
+                    .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(PressableButtonStyle())
         }
     }
 }
