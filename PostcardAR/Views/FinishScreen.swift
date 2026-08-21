@@ -20,13 +20,13 @@ struct FinishScreen: View {
                 .resizable()
                 .frame(width: cardSize.width, height: cardSize.height)
 
-            VStack(spacing: 8) {
+            VStack(spacing: 0.1) {
                 Text(label)
                     .font(.custom("JetBrainsMono-Regular", size: 18))
                     .foregroundStyle(Color(hex: 0x585757))
 
                 Text(value)
-                    .font(.custom("JetBrainsMono-Bold", size: 50))
+                    .font(.custom("JetBrainsMono-Bold", size: 72))
                     .foregroundStyle(DesignTokens.progressGradient)
                     .contentTransition(.numericText())
                     .animation(.snappy, value: value)
