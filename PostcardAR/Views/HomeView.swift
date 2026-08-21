@@ -74,6 +74,7 @@ struct HomeView: View {
                 .frame(height: 44)
                 .background(Capsule().fill(DesignTokens.secondaryBlue))
                 .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
+                .buttonStyle(PressableButtonStyle())
         }
     }
 }

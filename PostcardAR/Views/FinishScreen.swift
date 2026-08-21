@@ -28,6 +28,8 @@ struct FinishScreen: View {
                 Text(value)
                     .font(.custom("JetBrainsMono-Bold", size: 50))
                     .foregroundStyle(DesignTokens.progressGradient)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: value)
 
                 Text(title)
                     .font(.custom("JetBrainsMono-Bold", size: 28))
@@ -41,6 +43,7 @@ struct FinishScreen: View {
                     .frame(height: 44)
                     .background(Capsule().fill(DesignTokens.secondaryBlue))
                     .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
+                    .buttonStyle(PressableButtonStyle())
                     .padding(.top, 16)
             }
             .multilineTextAlignment(.center)

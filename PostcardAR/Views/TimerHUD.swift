@@ -32,10 +32,13 @@ struct TimerHUD: View {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(DesignTokens.progressGradient)
                     .frame(width: fillWidth, height: trackHeight)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: current)
 
                 Text("\(current)/\(total)")
                     .font(.custom("InterVariable", size: 13.71))
                     .foregroundStyle(DesignTokens.blackText)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: current)
                     .offset(x: 109)
             }
         }

@@ -37,17 +37,21 @@ private struct ScannerScreen: View {
             .overlay(alignment: .topLeading) { annotationLayer }
 
             .overlay(alignment: .topLeading) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "x.circle.fill")
-                        .font(.system(size: 28))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, .black.opacity(0.5))
+                if game.phase != .finished {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "x.circle.fill")
+                            .font(.system(size: 34))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .secondaryBlue.opacity(1))
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .padding()
                 }
-                .padding()
             }
             .overlay { runOverlay }
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: game.phase)
     }
 
     // MARK: Annotations
@@ -114,6 +118,7 @@ private struct ScannerScreen: View {
                 VStack(spacing: 12) {
                     Image(systemName: "viewfinder")
                         .font(.system(size: 44))
+                        .symbolEffect(.pulse)
                     Text("Point at the card again")
                         .font(.title3.weight(.semibold))
                     Text("\(game.graceSecondsRemaining)")
@@ -177,6 +182,7 @@ private struct ScannerScreen: View {
             content()
         }
         .foregroundStyle(.white)
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 
     // MARK: Status

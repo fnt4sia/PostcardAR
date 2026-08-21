@@ -36,3 +36,14 @@ extension Color {
         )
     }
 }
+
+/// Shared press feedback for every pill button and the X close button — a small scale-down
+/// while held, spring back on release. One definition so every button in the app presses the
+/// same way rather than each screen inventing its own.
+struct PressableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
