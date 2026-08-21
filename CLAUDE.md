@@ -32,6 +32,7 @@ individual card.
 | `Annotation*` | a point to hang an explanation label on |
 | `Drupella*` | a grabbable snail; `*_Outline` is its outline mesh |
 | `CoralPlantPoint*` | a slot a coral can be planted into — and the marker that a model *is* the planting game |
+| `CoralPlate*` | optional; the visible socket for the point of the same number, pulsed while that slot is free |
 | `SingleCoral*` | a coral that can be picked up and planted |
 
 ## Stack
@@ -354,10 +355,14 @@ be carried somewhere first, or corals authored beside their slots plant themselv
 are grabbed and can never be moved.
 
 **Nothing in the app draws a plant point**, and it should stay that way. A `CoralPlantPoint*` is
-registered exactly as the model ships it — geometry untouched, transform read but never written — so
-the indicator is the asset's job. An app-drawn disc was built and removed: sizing one against an
-arbitrary model is guesswork the model can answer directly. A coral takes its point's rotation, so a
-point whose transform the exporter baked flat plants corals upright; author them as empties.
+registered exactly as the model ships it — geometry untouched, transform read but never written. The
+only thing the app adds is *emphasis*: a paired `CoralPlate*` has its opacity breathed while its slot
+is free and held solid when it is the slot a held coral would drop into, so there is no size to get
+wrong. Two app-drawn discs were built and removed for exactly that reason — one sized from the corals
+covered 96% of the gap between slots and fused ten markers into one blob.
+
+A coral takes its point's rotation, so a point whose transform the exporter baked flat plants corals
+upright; author them as empties.
 
 **When AR geometry looks wrong, dump the asset before theorising.** ModelIO loads a `.usdz`
 headlessly and prints every prim's name, transform and bounds in a few lines of Swift. Two successive

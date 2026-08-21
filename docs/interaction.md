@@ -398,9 +398,12 @@ world transform from it same as any other parent/child pair.
 ### Plant points are left alone
 
 A `CoralPlantPoint*` is registered as-is: its geometry is not stripped, hidden or replaced, and its
-transform is read but never written. Whatever the model draws at that point is what the player sees,
-which is the whole of "the indicator is the asset's job". Annotations are the opposite case and do
-strip geometry, for reasons particular to them — see [annotations.md](annotations.md).
+transform is read but never written. The one thing the app touches is the *opacity* of a paired
+`CoralPlate*`, to breathe a free slot and hold the live target solid — no geometry of its own, no
+size to get wrong. See "Showing the player where a coral goes" in [simulation.md](simulation.md).
+
+Annotations are the opposite case and do strip geometry, for reasons particular to them — see
+[annotations.md](annotations.md).
 
 ## Haptics
 
@@ -445,6 +448,8 @@ exists:
 |---|---|---|
 | `plantSnapRadius` | how near a free plant point a coral must *appear*, in screen points | make planting more forgiving, at the risk of a coral jumping to a slot you did not mean |
 | `plantArmDistance` | how far a coral must be carried before it may plant | stop corals planting themselves the instant they are picked up |
+| `plantPulseMinOpacity` / `plantPulseMaxOpacity` | how faint and how solid a free slot's plate breathes | widen the gap to make empty sockets more obvious |
+| `plantPulsePeriod` | seconds per breath | slow the pulse down |
 
 `handScaleJointConfidenceMinimum` trades `ratio` update reliability for how loosely a `ratio`
 sample can be trusted — lower it further if the ring/release still stalls at close range, raise

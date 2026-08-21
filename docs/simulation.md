@@ -107,11 +107,38 @@ hand — and it means the success path never depends on catching the exact frame
 is the least reliable thing Vision does. The coral leaves the hand, is scored, and is not draggable
 again.
 
-**Nothing here draws a plant point.** A `CoralPlantPoint*` is registered exactly as the model ships
-it — its geometry is not stripped, hidden, or replaced — so showing the player where a coral goes is
-the model's job: author a marker on the point and it renders like any other part of the structure.
-An app-drawn indicator was tried and removed; sizing one correctly against an arbitrary model turned
-out to be guesswork the asset can simply answer.
+### Showing the player where a coral goes
+
+**Nothing is drawn and nothing is moved.** A `CoralPlantPoint*` is registered exactly as the model
+ships it. What a socket looks like is the model's business — it knows how big one is and which way it
+faces, which the app does not.
+
+What the app adds is emphasis. Ship a `CoralPlate*` alongside a point — paired by whatever follows
+the prefix, so `CoralPlate_03` belongs to `CoralPlantPoint_03`, the same idiom `Drupella_01_Outline`
+uses — and `updatePlantIndicators()` breathes its opacity:
+
+| Slot | Its plate |
+|---|---|
+| free | breathing between `plantPulseMinOpacity` and `plantPulseMaxOpacity` |
+| about to take the coral in hand | solid — the only steady plate on the board |
+| filled | solid, and left alone; it is structure again |
+
+The difference between the first two rows is the signal. Everything pulses, so an empty socket reads
+as *waiting for something*; the one that will actually receive the coral stops pulsing, so the player
+can see where it is going before letting go. The target comes from `plantTarget(for:)` under the same
+arming gate `updateDrag()` uses, so a plate never goes solid for a plant that would not happen.
+
+The pairing suffix must match exactly. A prefix test would also match each plate's own
+`CoralPlate_03_mesh` child, which the search returns alongside it.
+
+Plates are optional: a model without them plants corals identically, with nothing to breathe.
+
+**Two earlier indicators were built out of app-drawn geometry and both failed on sizing.** A disc
+scaled from the corals came out wider than the gap between slots — 96% of it on the shipped
+structure — so ten of them fused into one shape that read as a single marker in a single place.
+Capping the size fixed the overlap and still looked wrong. Emphasising the model's own plate has no
+size to get wrong, which is why it is the shape this finally took. Do not reintroduce app-drawn
+geometry here.
 
 **Letting go anywhere else returns the coral to where it started**, exactly as letting go of a snail
 away from its slot does, and it goes back into play. That is the only path that clears `removed`,

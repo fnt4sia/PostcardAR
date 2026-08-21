@@ -96,6 +96,23 @@ private let singleCoralPrefix = "SingleCoral"
 /// hand while merely passing over a slot on the way to another.
 private let plantSnapRadius: CGFloat = 80
 
+/// Prefix marking the visible plate that stands for a plant point. Paired to its
+/// `CoralPlantPoint*` by whatever follows the prefix — `CoralPlate_03` belongs to
+/// `CoralPlantPoint_03` — the same idiom `Drupella_01_Outline` already uses.
+///
+/// Optional. A model without these plants corals exactly the same; it just has nothing to breathe,
+/// so the player has to read the structure to see where a coral goes.
+private let coralPlatePrefix = "CoralPlate"
+
+/// A free slot's plate breathes between these opacities, so an empty socket reads as *waiting for
+/// something* rather than as one more piece of structure. The plate itself is the model's, and its
+/// size, shape and place are none of our business — only how strongly it is drawn.
+private let plantPulseMinOpacity: Float = 0.3
+private let plantPulseMaxOpacity: Float = 1.0
+
+/// Seconds for one full breath.
+private let plantPulsePeriod: TimeInterval = 1.3
+
 /// How far, in screen points, a coral must be carried before it is allowed to plant.
 ///
 /// Without this a coral authored sitting on or beside a free slot — which is exactly how a planting
@@ -283,9 +300,18 @@ final class PinchInteraction {
         /// The model it belongs to, matched against `Grabbable.model`.
         let model: Entity
 
+        /// The `CoralPlate*` that stands for this slot on screen, if the model ships one. Pulsed
+        /// while the slot is free — see `updatePlantIndicators()`. Never moved, never resized: the
+        /// model owns what it looks like, this only decides how strongly it is drawn.
+        let plate: Entity?
+
         /// Taken by a coral. A planted coral is not re-grabbable, so this never goes back to `false`
         /// except in `restoreAll()`.
         var filled = false
+
+        /// Opacity last written to `plate`, so a slot that is not currently breathing — filled, or
+        /// the live target — is not rewritten sixty times a second to the same value.
+        var plateOpacity: Float = -1
     }
 
     /// The run. Read for phase gating (grab, snap) and written to for scoring — `scored()` at the
@@ -479,10 +505,20 @@ final class PinchInteraction {
                 """)
         }
 
-        // Registered as they are. A plant point is a place, and showing the player where that place
-        // is belongs to the model — author a marker on the point and it renders like any other part
-        // of the structure.
-        plantPoints.append(contentsOf: points.map { PlantPoint(entity: $0, model: model) })
+        // Registered as they are: a plant point is a *place*, and what it looks like stays the
+        // model's business. Where one ships a `CoralPlate*` alongside, that plate is picked up here
+        // so `updatePlantIndicators()` can breathe it — drawing attention to the model's own shape
+        // rather than covering it with one of ours.
+        // The suffix has to match *exactly*, not merely start with: the prefix search also returns
+        // each plate's own `CoralPlate_03_mesh` child, and a prefix test would pair the point with
+        // whichever of the two came back first.
+        let plates = find(prefix: coralPlatePrefix, in: model)
+        plantPoints.append(contentsOf: points.map { point in
+            let suffix = point.name.dropFirst(plantPointPrefix.count)
+            return PlantPoint(entity: point,
+                              model: model,
+                              plate: plates.first { $0.name.dropFirst(coralPlatePrefix.count) == suffix })
+        })
 
         // Left exactly where the model puts them, like the snails. Whatever arrangement the asset
         // was authored with *is* the arrangement, and it is also the `home` an unplanted coral
@@ -490,6 +526,48 @@ final class PinchInteraction {
         grabbables.append(contentsOf: corals.map {
             Grabbable(entity: $0, game: .plantingCoral, model: model, home: $0.transform)
         })
+    }
+
+    /// Breathes the plate on every free slot, and holds the one a held coral would drop into solid.
+    /// Runs once a rendered frame, from `update()`.
+    ///
+    /// **Nothing is drawn and nothing is moved.** Two earlier attempts at an indicator built geometry
+    /// of the app's own — a disc sized against the corals — and both failed on sizing: on a board
+    /// whose slots sit closer together than its corals are wide, the discs overlapped into a single
+    /// blob. The model already knows how big a socket is and where it faces, so the only thing left
+    /// worth doing is making its own plate impossible to miss. Opacity is the whole mechanism.
+    ///
+    /// Three states, and the difference between the first two is the signal:
+    ///
+    /// | Slot | Plate |
+    /// |---|---|
+    /// | free | breathing between `plantPulseMinOpacity` and `plantPulseMaxOpacity` |
+    /// | about to take the coral in hand | solid, and the only steady one on the board |
+    /// | filled | solid, and left alone — it is structure again |
+    ///
+    /// The target is read from `plantTarget(for:)` under the same arming gate `updateDrag()` uses,
+    /// so a plate never goes solid for a plant that would not actually happen.
+    private func updatePlantIndicators() {
+        guard !plantPoints.isEmpty else { return }
+
+        let target = heldHasTravelled ? held.flatMap { plantTarget(for: $0.index) } : nil
+        // A sine over wall-clock time rather than a frame counter: the breath then keeps its period
+        // on a device rendering at 30 fps as readily as at 60.
+        let breath = (sin(Date().timeIntervalSinceReferenceDate * 2 * .pi / plantPulsePeriod) + 1) / 2
+        let pulse = plantPulseMinOpacity
+            + Float(breath) * (plantPulseMaxOpacity - plantPulseMinOpacity)
+
+        for index in plantPoints.indices {
+            guard let plate = plantPoints[index].plate else { continue }
+
+            let opacity = plantPoints[index].filled || index == target ? plantPulseMaxOpacity : pulse
+
+            // A breathing plate changes every frame and is written every frame; a solid one settles
+            // and stops being touched.
+            guard abs(plantPoints[index].plateOpacity - opacity) > 0.005 else { continue }
+            plantPoints[index].plateOpacity = opacity
+            plate.components.set(OpacityComponent(opacity: opacity))
+        }
     }
 
     /// The free plant point a coral would snap into if released now, or `nil` for none in range.
@@ -552,6 +630,7 @@ final class PinchInteraction {
         sample()
         updateDrag()
         updateFading()
+        updatePlantIndicators()
     }
 
     /// Puts every picked-off snail back where its model loaded, ready for another run.

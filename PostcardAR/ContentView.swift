@@ -191,7 +191,7 @@ private struct ScannerScreen: View {
                 VStack(spacing: 10) {
                     Image(systemName: "hand.raised.slash")
                         .font(.system(size: 44))
-                    Text("Move your hand back")
+                    Text("Move your hand away   ")
                         .font(.title3.weight(.semibold))
                     Text("Keep your whole hand in the camera's view.")
                         .font(.footnote)

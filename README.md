@@ -76,7 +76,8 @@ case-sensitive, and anything unmatched is scenery:
 |---|---|
 | `Annotation*` | An explanation label pinned to that point, with text from `<card name>.json`. Works on any card — see [docs/annotations.md](docs/annotations.md). |
 | `Drupella*` | A snail to pinch off. A model with these runs the **removal** minigame. |
-| `CoralPlantPoint*` | A slot to plant a coral into. A model with these runs the **planting** minigame. Draw your own marker on it — the app draws nothing. Keep its rotation unbaked and planted corals adopt it. |
+| `CoralPlantPoint*` | A slot to plant a coral into. A model with these runs the **planting** minigame. Keep its rotation unbaked and planted corals adopt it. |
+| `CoralPlate*` | Optional. The visible socket for the point of the same number — `CoralPlate_03` goes with `CoralPlantPoint_03`. The app pulses it while that slot is free. |
 | `SingleCoral*` | A coral to pick up and plant. Stays exactly where you put it in the model. |
 
 Which minigame a simulation card runs is read from these, not from the card's name: plant points win
@@ -94,7 +95,7 @@ if both are present. So there is one naming rule to keep in step (image ↔ `.us
 | No minigame on a card | Either it is a showcase card — only a name starting `Simulation` runs one, and the `.usdz` needs the same prefix — or the model has no `Drupella*` or `CoralPlantPoint*` entities in it, which the status panel says outright. |
 | Annotations do not appear | The entity name in the `.usdz` and the `"entity"` in the `.json` have to match exactly. Every mismatch is named in the status panel — see [docs/annotations.md](docs/annotations.md). |
 | A coral will not snap onto a plant point | Carry it at least `plantArmDistance` from where you grabbed it, then bring it within `plantSnapRadius` (80 screen points) of a free point on its own structure. |
-| Nothing shows where corals should go | The app draws nothing at a plant point on purpose. Put a marker on the `CoralPlantPoint*` in your model and it renders with the rest of the structure. |
+| Nothing shows where corals should go | Add a `CoralPlate_NN` to your model beside each `CoralPlantPoint_NN`. The app pulses it while the slot is free and holds it solid when a held coral is about to land there; it draws nothing itself. |
 | The run restarted from zero | The card left frame with no hand in it for more than 3 seconds. Inside 3 seconds the score and clock are held; keeping a hand in frame holds the model indefinitely. |
 | The instructions screen vanished | The card left frame. That screen has no grace period — nothing has started yet, so there is nothing to hold. Point at the card again and it comes back from the start. |
 | The screen blurred, "Move your hand back" | Your hand is too close to the lens for the camera to make out your fingertips, so no pinch can be read. Pull back, or bring your whole hand into frame. |
