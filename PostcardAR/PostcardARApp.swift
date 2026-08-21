@@ -9,6 +9,10 @@ import SwiftUI
 
 @main
 struct PostcardARApp: App {
+    init() {
+        _ = DesignTokens.fontsRegistered
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
