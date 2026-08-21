@@ -147,19 +147,11 @@ private struct ScannerScreen: View {
             .fill(.ultraThinMaterial)
             .ignoresSafeArea()
             .overlay {
-                VStack(spacing: 10) {
-                    Image(systemName: "hand.raised.slash")
-                        .font(.system(size: 44))
-                    Text("Move your hand back")
-                        .font(.title3.weight(.semibold))
-                    Text("Keep your whole hand in the camera's view.")
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.white.opacity(0.75))
-                }
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.6), radius: 4)
-                .padding(32)
+                HandTooCloseCard(
+                    icon: "hand.raised",
+                    title: "PUT YOUR HAND\nFURTHER AWAY",
+                    message: "Keep your whole hand on the camera view."
+                )
             }
             .transition(.opacity)
     }
