@@ -46,7 +46,7 @@ struct HandTooCloseCard: View {
 
 #Preview {
     ZStack {
-        Color(hex: 0x081A49).ignoresSafeArea()
+        Color(hex: 00000).ignoresSafeArea()
         HandTooCloseCard(
             icon: "hand.raised",
             title: "PUT YOUR HAND\nFURTHER AWAY",

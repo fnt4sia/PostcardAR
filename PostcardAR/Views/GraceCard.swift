@@ -62,7 +62,7 @@ struct GraceCard: View {
 
 #Preview {
     ZStack {
-        Color(hex: 0x081A49).ignoresSafeArea()
+        Color(hex: 00000).ignoresSafeArea()
         GraceCard(
             title: "POINT AT THE CARD AGAIN",
             message: "Your score and time are held until this reaches zero.",

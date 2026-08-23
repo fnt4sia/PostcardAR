@@ -129,8 +129,8 @@ private struct ScannerScreen: View {
                     label: "CLEARED",
                     value: "\(game.score)",
                     title: "DRUPELLA REMOVED",
-                    buttonTitle: "Play Again",
-                    action: { game.playAgain() }
+                    restartAction: { game.playAgain() },
+                    finishAction: { dismiss() }
                 )
             }
         }
