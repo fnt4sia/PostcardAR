@@ -54,7 +54,18 @@ private struct ScannerScreen: View {
                 }
             }
             .overlay { runOverlay }
-            // A light tap on each of 3·2·1, a stronger one on "START!" — same asymmetry as the Camera app's own self-timer. 
+            // Phase-keyed haptics, independent of the per-second ones below: a "get ready" tap
+            // right at countdown kickoff (before 3 even shows — the text-keyed haptic only fires
+            // on a *change*, so a countdownText already "3" from its default would otherwise skip
+            // that first beat), and a success tap the instant the result card appears.
+            .onChange(of: game.phase) { _, phase in
+                switch phase {
+                case .countdown: UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                case .finished: UINotificationFeedbackGenerator().notificationOccurred(.success)
+                default: break
+                }
+            }
+            // A light tap on each of 3·2·1, a stronger one on "START!" — same asymmetry as the Camera app's own self-timer.
             .onChange(of: game.countdownText) { _, text in
                 if text == "START!" {
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -116,11 +127,15 @@ private struct ScannerScreen: View {
         case .playing:
             ZStack(alignment: .top) {
                 if status.handTooClose { tooCloseNotice }
-            
+
                 TimerHUD(secondsRemaining: game.secondsRemaining, current: game.score, total: 8)
                     .padding(.top, 50)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .overlay(alignment: .bottom) {
+                PlayingHintBar(text: "PINCH & HOLD TO REMOVE")
+                    .padding(.bottom, 37)
+            }
             .animation(.easeInOut(duration: 0.2), value: status.handTooClose)
 
         case .grace:
