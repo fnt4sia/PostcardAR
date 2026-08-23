@@ -101,7 +101,7 @@ private struct ScannerScreen: View {
 
         case .countdown:
             dimmed {
-                CountdownCard(number: game.countdownNumber)
+                CountdownCard(text: game.countdownText)
             }
 
         case .playing:

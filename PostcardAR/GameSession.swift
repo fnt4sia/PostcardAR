@@ -17,8 +17,7 @@ import Foundation
 /// How long one run lasts.
 private let runDuration: TimeInterval = 30
 
-/// The 3 · 2 · 1 between tapping Start and the first grab.
-private let countdownDuration: TimeInterval = 3
+private let countdownDuration: TimeInterval = 4
 
 /// How long a run survives with its card off camera and no hand to lock it. Long enough to
 /// re-aim a phone, short enough that a run cannot be parked indefinitely.
@@ -67,7 +66,7 @@ final class GameSession {
     /// Whole seconds, for the overlays. Written only when the displayed value actually changes:
     /// `@Observable` notifies on every set without comparing, and these are set once a frame.
     private(set) var secondsRemaining = Int(runDuration)
-    private(set) var countdownNumber = Int(countdownDuration)
+    private(set) var countdownText = "3"
     private(set) var graceSecondsRemaining = Int(graceDuration)
 
     /// The clocks themselves, counted down in `update(cardPresent:now:)`.
@@ -221,8 +220,9 @@ final class GameSession {
         let seconds = Int(timeLeft.rounded(.up))
         if secondsRemaining != seconds { secondsRemaining = seconds }
 
-        let count = max(1, Int(countdownLeft.rounded(.up)))
-        if countdownNumber != count { countdownNumber = count }
+        let bucket = max(0, Int(countdownLeft.rounded(.up)) - 1)
+        let text = bucket > 0 ? "\(bucket)" : "START!"
+        if countdownText != text { countdownText = text }
 
         let grace = max(0, Int(graceLeft.rounded(.up)))
         if graceSecondsRemaining != grace { graceSecondsRemaining = grace }
