@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @State private var isScanning = false
@@ -53,6 +54,14 @@ private struct ScannerScreen: View {
                 }
             }
             .overlay { runOverlay }
+            // A light tap on each of 3·2·1, a stronger one on "START!" — same asymmetry as the Camera app's own self-timer. 
+            .onChange(of: game.countdownText) { _, text in
+                if text == "START!" {
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                } else {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
+            }
     }
 
     // MARK: Annotations
