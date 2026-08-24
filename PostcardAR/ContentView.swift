@@ -17,20 +17,29 @@ struct ContentView: View {
     @State private var library = ModelLibrary()
 
     var body: some View {
-        HomeView(action: {
-            isScanning = true
-            // Returns immediately once the library is loaded, which is why only the first scan of
-            // a launch ever sees `LoadingView`.
-            Task { await library.load() }
-        })
-        .fullScreenCover(isPresented: $isScanning) {
-            if library.isReady {
-                ScannerScreen(library: library)
-                    .onDisappear { isScanning = false }
-            } else {
-                LoadingView(loaded: library.loaded, total: library.total)
+        ZStack {
+            HomeView(action: {
+                isScanning = true
+                // Returns immediately once the library is loaded, which is why only the first scan
+                // of a launch ever sees `LoadingView`.
+                Task { await library.load() }
+            })
+
+            // A plain conditional instead of `.fullScreenCover`: a cover's dismissal is a fixed
+            // system slide, not something SwiftUI lets you restyle. This crossfades instead, like
+            // every other panel in the app (`dimmed()`, the phase-to-phase run UI).
+            if isScanning {
+                Group {
+                    if library.isReady {
+                        ScannerScreen(library: library, close: { isScanning = false })
+                    } else {
+                        LoadingView(loaded: library.loaded, total: library.total)
+                    }
+                }
+                .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: isScanning)
     }
 }
 
@@ -44,7 +53,10 @@ private struct ScannerScreen: View {
     /// Loaded before this screen was built — see `ModelLibrary`.
     let library: ModelLibrary
 
-    @Environment(\.dismiss) private var dismiss
+    /// Replaces `@Environment(\.dismiss)` — that only exists inside a real presentation
+    /// (`.sheet`/`.fullScreenCover`), and this screen is a plain conditional now. See `ContentView`.
+    let close: () -> Void
+
     @State private var status = ARStatus()
     @State private var game = GameSession()
     @State private var annotations = AnnotationLayer()
@@ -59,7 +71,7 @@ private struct ScannerScreen: View {
                 // result screen is.
                 if game.phase != .finished && game.phase != .countdown {
                     Button {
-                        dismiss()
+                        close()
                     } label: {
                         Image(systemName: "x.circle.fill")
                             .font(.system(size: 34))
@@ -149,7 +161,7 @@ private struct ScannerScreen: View {
                     value: "\(game.score)",
                     title: game.minigame.settings.resultTitle,
                     restartAction: { game.playAgain() },
-                    finishAction: { dismiss() }
+                    finishAction: { close() }
                 )
             }
         }
