@@ -20,8 +20,11 @@ struct TimerHUD: View {
                 .frame(width: 200, height: 50)
                 .overlay {
                     Text(timeString)
-                        .font(.custom("JetBrainsMono-Regular", size: 34))
+                        .font(DesignTokens.Typography.clock)
                         .foregroundStyle(DesignTokens.whiteText)
+                        // The capsule behind it is a fixed 200 x 50.
+                        .fitsOneLine(minimumScale: 0.6)
+                        .padding(.horizontal, 12)
                 }
 
             ZStack(alignment: .leading) {
@@ -35,8 +38,10 @@ struct TimerHUD: View {
                     .animation(.spring(response: 0.4, dampingFraction: 0.8), value: current)
 
                 Text("\(current)/\(total)")
-                    .font(.custom("InterVariable", size: 13.71))
+                    .font(DesignTokens.Typography.scoreFraction)
                     .foregroundStyle(DesignTokens.blackText)
+                    // Inside a 23pt-tall track, so it shrinks rather than pushing the track open.
+                    .fitsOneLine(minimumScale: 0.7)
                     .contentTransition(.numericText())
                     .animation(.snappy, value: current)
                     .offset(x: 109)

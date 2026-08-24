@@ -243,8 +243,11 @@ error, nothing in the console, and it happens the moment the model is added to t
 looks like a hang in whatever code ran last, not like an asset problem.
 
 `ModelLibrary.removeCameras(from:)` strips them at load time, so this is handled for any model you
-drop in — `Showcase_Biorock.usdz` ships one. Do not remove that call. Lights import as inert
-entities and are harmless; see below for why they also do nothing.
+drop in — `Showcase_Biorock.usdz` ships one. Do not remove that call.
+
+The **world** is the second dangerous one, for the same reason and less obviously —
+`ModelLibrary.removeImportedLighting(from:)` strips that. See "Your Blender lights do not come with
+it, except the world" below. The remaining lights import as inert entities and are harmless.
 
 To see what an asset actually contains, dump the prim types:
 
@@ -261,24 +264,82 @@ Diagnose an imported asset by walking the loaded entity tree and printing compon
 by reading the file size — the shipped coral is 9 MB and froze the camera, while a 52 MB model
 did not.
 
-### Your Blender lights do not come with it
+### Your Blender lights do not come with it, except the world
 
-They are *in* the file — every model here exports one (`DomeLight "env_light"`, `SphereLight
+They are *in* the file — every model here exports several (`DomeLight "env_light"`, `SphereLight
 "Light"`, and `Simulation_Drupella.usdz` also carries a `DistantLight "Sun"` and three
-`RectLight`s). RealityKit imports them as inert entities and lights nothing with them. There is no
-setting that turns them on, and this is not a bug to work around.
+`RectLight`s). The punctual ones — sphere, distant, rect — import as inert entities and light
+nothing. There is no setting that turns them on, and this is not a bug to work around.
 
-It is also the right behaviour for AR. In `ARView(cameraMode: .ar)` the scene is lit by ARKit's
-automatic environment probe — the actual room the card is sitting in — so a model looks like it
-belongs on the table rather than like it is lit from a Blender scene that is not there.
+**The `DomeLight` is the exception, and it is not inert.** Since iOS 18 RealityKit imports a USD
+`DomeLight` as an `ImageBasedLightComponent`, and an image-based light on an entity *overrides* the
+scene's own environment for that entity's whole subtree. Whatever `ARView.environment.lighting` is
+set to simply stops reaching the model — silently, with nothing in the console.
 
-Three ways to get the look back, in the order worth trying:
+Every `.usdz` here ships one and every one of them is near-black. Blender bakes a constant world
+colour to a one-pixel `.exr` named after its hex, so you can read them straight out of the archive:
+
+```sh
+unzip -l model.usdz | grep textures/color_
+#  Showcase_Coral.usdz     -> textures/color_0C0C0C.exr    (RGB 12,12,12)
+#  Showcase_Drupella.usdz  -> textures/color_191C21.exr    (RGB 25,28,33)
+#  Simulation_Drupella.usdz-> textures/color_191C21.exr
+```
+
+A model lit by a #0C0C0C sky renders almost black whatever the room is doing, which is exactly what
+it looked like. `ModelLibrary.removeImportedLighting(from:)` removes
+`ImageBasedLightComponent` and `ImageBasedLightReceiverComponent` from every entity in the tree at
+load, next to the camera strip and for the same reason. Do not remove that call. Cleaner still is
+to fix it at the source: uncheck lights in Blender's USD exporter.
+
+### How models are actually lit
+
+By a key light and a fixed environment, both the same in every room — **not** by the camera probe.
+
+**The key light** is a `DirectionalLightComponent` at `keyLightIntensity` (2145.7 lux, RealityKit's
+own default for one), on a plain `Entity` parented to `worldRoot` and pitched `keyLightPitch` — 70°
+down rather than 90°, so it lands on the fronts of the models and not only their tops. A directional
+light shines along its entity's **-z**, so aiming one is rotating it. It goes on a *child* of the
+anchor because an `AnchorEntity`'s own transform is RealityKit's to write; see "Never write to an
+anchor" in [tracking.md](tracking.md).
+
+**The environment** is the ambient half. `Coordinator.studioEnvironment()` renders a three-stop
+vertical gradient (`skyZenithColor`, `skyHorizonColor`, `skyGroundColor`) into a 256 × 128
+`CGImage`, hands it to `EnvironmentResource(equirectangular:)`, and assigns it to
+`arView.environment.lighting.resource`. `environmentIntensityExponent` scales it as a power of two.
+
+Which dial to reach for: `environmentIntensityExponent` if the whole model is too dark,
+`keyLightIntensity` if it is the *shadow* sides that are.
+
+**Do not delete the key light as redundant.** The environment is assembled at run time from a
+generated image and a resource initialiser, and each step can fail on a device with nothing on
+screen to say so. A directional light is a number in a component. With it, a failed environment is
+harsh one-sided lighting — visible, describable. Without it, it was a black screen.
+
+`arView.environment` is read once into a local, mutated, and written back once. It is a struct
+behind a get/set pair, so touching one field at a time is a full read-modify-write of background,
+lighting *and* reverb; do two in a row and the second undoes the first. `background` is set to
+`.cameraFeed()` explicitly in that same write rather than trusted to survive it — losing it replaces
+the passthrough camera with a flat colour, which does not look like a lighting bug at all, it looks
+like the app is dead.
+
+It is a gradient rather than a flat colour on purpose: a uniform environment lights every face of a
+model identically, which erases its form and reads as a cut-out pasted on the camera image.
+Brighter above than below is what puts a highlight on the tops of the corals and a shadow under
+them. The greys are neutral because the textures are baked and already carry their own colour — a
+tinted sky would cast that tint over work authored to look right.
+
+This replaces ARKit's light estimate, which is switched off in the session configuration. See
+"Lighting" in `docs/tracking.md` for why.
+
+The alternatives, if this is ever reworked:
 
 | Approach | When |
 |---|---|
-| **Bake the lighting into the textures** | almost always. It is what most of these assets already do — `BakedBaseColor`, `BakedCoral_*`, `Bake_Sand` — and it costs nothing at runtime. A model that reads flat next to a baked one has simply not been baked. |
-| Add real lights in code | for a key or rim light that has to follow the model. `DirectionalLightComponent`, `PointLightComponent` and `SpotLightComponent` are all available from iOS 13, and take `intensity` in lux. Attach one to the pivot, not to the model, so it survives cloning. |
-| Supply a custom environment | `arView.environment.lighting.resource = try EnvironmentResource(…)` replaces the camera probe with your own IBL, and `intensityExponent` scales it. Fights the AR illusion — the model stops matching the room — so it is a last resort. |
+| **Bake the lighting into the textures** | almost always, and independent of the above. It is what most of these assets already do — `BakedBaseColor`, `BakedCoral_*`, `Bake_Sand` — and it costs nothing at runtime. A model that reads flat next to a baked one has simply not been baked. |
+| Change `environmentIntensityExponent` or the three sky colours | the first thing to reach for. No new asset, no new code. |
+| Add real lights in code | for a key or rim light that has to follow the model. `DirectionalLightComponent`, `PointLightComponent` and `SpotLightComponent` all take `intensity` in lux. Attach one to the pivot, not to the model, so it survives cloning — and expect it to fight the baked textures, which already contain a light rig. |
+| Bundle an authored `.exr` and load it with `EnvironmentResource(named:)` | only for a look a gradient cannot express. It is one more asset to keep in step with a lighting change made in code. |
 
 ### Animation has to be exported *and* played
 

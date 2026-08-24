@@ -26,7 +26,11 @@ struct CountdownCard: View {
                 .frame(width: cardSize.width, height: cardSize.height)
 
             Text(text)
-                .font(.custom("JetBrainsMono-Bold", size: fontSize))
+                .font(DesignTokens.Typography.countdownValue(size: fontSize))
+                // "START!" is six characters at 70pt in a 266pt box — it is already close, and
+                // one Dynamic Type step puts it over. The digits have room to spare; this costs
+                // them nothing.
+                .fitsOneLine(minimumScale: 0.5)
                 .foregroundStyle(DesignTokens.whiteText)
                 .contentTransition(.numericText(countsDown: true))
                 .scaleEffect(pulsed ? 1.15 : 1)

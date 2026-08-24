@@ -47,10 +47,10 @@ private let modelWidths: [String: Float] = [
     // 15.2 cm on a 6-inch card — so a model 30 cm wide overhung it by a factor of two and could not
     // read as standing *on* anything. Anything up to about 0.14 stays within its floor. A card whose
     // model ships its own ground (`Showcase_Biorock`) is not constrained this way.
-    "Showcase_Coral": 0.13,
+    "Showcase_Coral": 0.12,
     "Showcase_Drupella": 0.08,
     "Simulation_Coral": 0.4,
-    "Simulation_Drupella": 0.55,
+    "Simulation_Drupella": 0.2,
 ]
 
 /// Width a card without an entry in `modelWidths` is sized to.
@@ -152,6 +152,7 @@ final class ModelLibrary {
             do {
                 let floor = try await Entity(named: seafloorModelName)
                 Self.removeCameras(from: floor)
+                Self.removeImportedLighting(from: floor)
                 seafloorModel = floor
             } catch {
                 errors.append("Could not load \(seafloorModelName).usdz: \(error.localizedDescription)")
@@ -164,6 +165,7 @@ final class ModelLibrary {
             do {
                 let model = try await Entity(named: name)
                 Self.removeCameras(from: model)
+                Self.removeImportedLighting(from: model)
                 fit(model, named: name)
                 models[name] = model
             } catch {
@@ -296,6 +298,29 @@ final class ModelLibrary {
         if entity.components.has(PerspectiveCameraComponent.self) {
             entity.removeFromParent()
         }
+    }
+
+    /// Strips the sky a model brought with it.
+    ///
+    /// The same hazard as `removeCameras(from:)`, and the newer half of it. A Blender export
+    /// carries the world as a dome light, and RealityKit — since iOS 18 — imports a USD
+    /// `DomeLight` as an `ImageBasedLightComponent`. That component *overrides* the scene's own
+    /// environment for the subtree it sits on, so whatever `ARView.environment.lighting` is set to
+    /// stops reaching the model, silently and with nothing in the log.
+    ///
+    /// Every `.usdz` in this project ships one and every one of them is near-black — the dome's
+    /// colour is baked to a one-pixel `.exr` named after its hex, and the bundle holds
+    /// `color_0C0C0C.exr` (`Showcase_Coral`) and `color_191C21.exr` (`Showcase_Drupella` and both
+    /// simulation cards). A model lit by that renders almost black whatever the room is doing,
+    /// which is exactly what it looked like.
+    ///
+    /// The *other* imported lights are still left alone, and still inert: a Blender point or sun
+    /// light comes in as an entity with no light component and changes nothing. It is only the
+    /// world that survives the trip. See docs/models.md.
+    private static func removeImportedLighting(from entity: Entity) {
+        entity.components.remove(ImageBasedLightComponent.self)
+        entity.components.remove(ImageBasedLightReceiverComponent.self)
+        for child in entity.children { removeImportedLighting(from: child) }
     }
 
     /// Scales a model to its fixed target width (`modelWidths`) and sits it centred on its card,

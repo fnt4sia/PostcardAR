@@ -10,6 +10,9 @@ struct HandTooCloseCard: View {
     var title: String
     var message: String
 
+    /// Grows with the text beside it — see `GraceCard`, which sizes its icon the same way.
+    @ScaledMetric(relativeTo: .largeTitle) private var iconSize: CGFloat = 44
+
     private let cardSize = CGSize(width: 344, height: 439.018)
 
     var body: some View {
@@ -28,16 +31,18 @@ struct HandTooCloseCard: View {
     private var content: some View {
         VStack(spacing: 15) {
             Image(systemName: icon)
-                .font(.system(size: 44))
+                .font(.system(size: iconSize))
                 .foregroundStyle(DesignTokens.blueText)
 
             Text(title)
-                .font(.custom("JetBrainsMono-Bold", size: 34))
+                .font(DesignTokens.Typography.panelTitle)
+                .fitsBlock()
                 .multilineTextAlignment(.center)
                 .foregroundStyle(DesignTokens.whiteText)
 
             Text(message)
-                .font(.custom("InterVariable", size: 18))
+                .font(DesignTokens.Typography.body)
+                .fitsBlock()
                 .multilineTextAlignment(.center)
                 .foregroundStyle(DesignTokens.blueText)
         }

@@ -21,7 +21,10 @@ private let countdownDuration: TimeInterval = 4
 
 /// How long a run survives with its card off camera and no hand to lock it. Long enough to
 /// re-aim a phone, short enough that a run cannot be parked indefinitely.
-private let graceDuration: TimeInterval = 3
+///
+/// Raised from 3 s: re-finding a card that has been put down, rather than merely re-aiming at one
+/// still in shot, routinely took longer than three seconds and wiped runs that were going fine.
+private let graceDuration: TimeInterval = 5
 
 /// How long `.instructions` tolerates the card reading as lost before it actually resets. Not a
 /// grace period — that protects a score and a clock that don't exist yet, see `update`'s comment

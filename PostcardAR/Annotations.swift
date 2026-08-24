@@ -58,10 +58,24 @@ private let annotationLeaderThickness: Float = 0.0018
 
 /// Radius of the dot left on the marker point itself, in metres. It is the tap target as well as
 /// the marker, so it is drawn a little larger than a pure marker would need to be.
-private let annotationDotRadius: Float = 0.006
+private let annotationDotRadius: Float = 0.003
 
 /// Colour of the dots and leader lines.
 private let annotationLineColor = UIColor.white
+
+/// The material both markers wear — see `annotationLineColor`.
+///
+/// **`applyPostProcessToneMap: false` is what makes white actually white.** An ordinary
+/// `UnlitMaterial` still goes through the renderer's filmic tone map on its way to the screen, and
+/// that curve rolls the top of its range off: a marker authored at pure `#FFFFFF` lands somewhere
+/// around light grey, which against a bright reef is close to invisible. These two are interface,
+/// not scenery — they mark a spot and say "press here" — so they are the one thing in the scene
+/// that should be exempt from the grade the models are being given.
+private func annotationMarkerMaterial() -> UnlitMaterial {
+    var material = UnlitMaterial(applyPostProcessToneMap: false)
+    material.color = .init(tint: annotationLineColor)
+    return material
+}
 
 /// How close a tap has to land to a dot's projected position, in screen points, to toggle it.
 ///
@@ -330,7 +344,7 @@ final class AnnotationLayer {
     /// The dot left on the marker point itself.
     private static func dot(at position: SIMD3<Float>) -> ModelEntity {
         let entity = ModelEntity(mesh: .generateSphere(radius: annotationDotRadius),
-                                 materials: [UnlitMaterial(color: annotationLineColor)])
+                                 materials: [annotationMarkerMaterial()])
         entity.position = position
         return entity
     }
@@ -352,7 +366,7 @@ final class AnnotationLayer {
             mesh: .generateBox(width: annotationLeaderThickness,
                                height: annotationLeaderThickness,
                                depth: length),
-            materials: [UnlitMaterial(color: annotationLineColor)])
+            materials: [annotationMarkerMaterial()])
 
         let direction = span / distance
         // `generateBox` builds along +z, so rotate +z onto the direction of travel and sit the box

@@ -10,6 +10,9 @@ struct HomeView: View {
 
     private let background = Color(hex: 0x081A49)
 
+    /// How much room the headline may take, against the card's own 344pt width.
+    private let headlineWidth: CGFloat = 320
+
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
@@ -43,23 +46,31 @@ struct HomeView: View {
         VStack(spacing: 20) {
             VStack(spacing: 8) {
                 Text("CORALIZE")
-                    .font(.custom("JetBrainsMono-Bold", size: 52.788))
+                    .font(DesignTokens.Typography.homeTitle)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(DesignTokens.blackText)
-                    // Wider than `content`'s 239.304pt frame (sized for the subtitle/button, not
-                    // this headline) — without this "CORALIZE" wraps after the "z".
-                    .fixedSize()
+                    // One line, shrinking if it must. The frame is wider than `content`'s
+                    // 239.304pt column (sized for the subtitle and button, not this headline) —
+                    // without the extra width "CORALIZE" wraps after the "z". A fixed `.frame`
+                    // rather than the `.fixedSize()` this used to be: `.fixedSize()` asks for the
+                    // text's ideal width and takes it whatever that is, so at the top of the
+                    // Dynamic Type range the headline simply ran off both edges of the phone.
+                    // A frame gives `minimumScaleFactor` a box to fit into instead.
+                    .fitsOneLine(minimumScale: 0.4)
+                    .frame(width: headlineWidth)
                 Text("Welcome, scientists!\nGet your cards ready.")
-                    .font(.custom("JetBrainsMono-Regular", size: 18))
+                    .font(DesignTokens.Typography.monoBody)
+                    .fitsBlock()
                     .multilineTextAlignment(.center)
                     .foregroundStyle(DesignTokens.blackText)
             }
             Button(action: action) {
                 Text("Scan a Card")
-                    .font(.custom("InterVariable", size: 18))
+                    .font(DesignTokens.Typography.button)
                     .foregroundStyle(DesignTokens.whiteText)
+                    .fitsOneLine(minimumScale: 0.7)
                     .padding(.horizontal, 20)
-                    .frame(height: 44)
+                    .frame(minHeight: 44)
                     .background(Capsule().fill(DesignTokens.secondaryBlue))
                     .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
                     .contentShape(Capsule())

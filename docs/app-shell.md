@@ -254,6 +254,58 @@ and clock stay sharp, and the whole `ZStack` carries the `.animation(value:)` so
 in and out rather than snapping. Why the state exists at all is in
 [interaction.md](interaction.md); the phase gate is in [simulation.md](simulation.md).
 
+## Part 2b — Type, and how big it is allowed to get
+
+Every font in the app is a named token in `DesignTokens.Typography`, and every screen reads one.
+Nothing calls `Font.custom` with a literal size any more; the Figma numbers all live in that one
+enum.
+
+**Collecting them was not tidying — it was the fix.** `Font.custom(_:size:)` is not a fixed size.
+It scales with the system text setting, and it scales relative to **`.body`** regardless of the
+size handed to it. That is the right curve for an 18 pt paragraph and the wrong one for a 164 pt
+numeral: body grows by roughly 130% at the largest accessibility setting, which put the countdown
+digit on course for 380 pt inside a 282 pt card and the result score at 166 pt. Each token now names
+the text style it actually resembles — display type to `.largeTitle`, the `3/8` in the progress
+track to `.caption` — so each size grows on the curve Apple tuned for type of that weight.
+
+Three things hold the layouts together, and all three are needed:
+
+| Piece | Where | Does |
+|---|---|---|
+| The tokens | `DesignTokens.Typography` | puts each size on its own Dynamic Type curve |
+| `accessibleLayout()` | once, on `ContentView`'s root | caps the range at `maximumDynamicTypeSize` |
+| `fitsOneLine()` / `fitsBlock()` | at each site in fixed geometry | shrinks rather than wrapping, clipping or truncating |
+
+### The cap is measured, not guessed
+
+`maximumDynamicTypeSize` is **`.xxxLarge`**, and that number came from running the screens, not from
+judgement. At `.accessibility1` the instructions card puts its title above the card's top edge and
+its Start button below the bottom one: the content is simply taller than 439 pt by then, and no
+amount of shrinking *inside* the column fixes a column that has run out of card. `.xxxLarge` is the
+last step every panel still holds, and it is about a quarter larger than the default. Anything the
+device asks for above that is clamped down to it, so a phone set to AX5 gets `.xxxLarge` here —
+bigger than default, still inside the design — rather than an overlapping mess.
+
+The cards are fixed-size images at Figma coordinates (344 × 439, with a 266 pt content column), and
+that is the whole reason for a cap. **Raising it means giving the cards room first** — a card that
+grows with its content — not simply moving the number up.
+
+### Shrinking is the safety net, not the mechanism
+
+The cap keeps text inside the layouts in the ordinary case. `fitsOneLine()` and `fitsBlock()` are
+what make that guaranteed rather than hoped for, and they are why nothing clips if the tokens are
+retuned later.
+
+`fitsBlock()` exists because of a specific failure: when a fixed-height card cannot fit its column,
+SwiftUI *truncates* the most compressible text in it, and on these panels that is the title.
+"POINT AT THE CARD AGAIN" came out as "POINT AT THE CARD…". Shrinking a title by a fifth is
+invisible; losing its last word is not.
+
+Two places use `@ScaledMetric` instead of a font token — the `viewfinder` and `hand.raised` symbols
+on the grace and hand-too-close cards, and the close button over the camera. `Font.system(size:)` is
+genuinely fixed, so an SF Symbol sized that way would have been the one thing on the card that did
+not grow with the words beside it.
+
 ## Part 3 — Bridging to UIKit
 
 RealityKit's `ARView` is a UIKit class (`UIView`), and SwiftUI cannot render one directly. The

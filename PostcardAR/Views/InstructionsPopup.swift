@@ -31,11 +31,13 @@ struct InstructionsPopup: View {
         VStack(spacing: 15) {
             VStack(spacing: 15) {
                 Text(title)
-                    .font(.custom("JetBrainsMono-Bold", size: 34))
+                    .font(DesignTokens.Typography.panelTitle)
+                    .fitsBlock()
                     .multilineTextAlignment(.center)
                     .foregroundStyle(DesignTokens.whiteText)
                 Text(message)
-                    .font(.custom("InterVariable", size: 18))
+                    .font(DesignTokens.Typography.body)
+                    .fitsBlock()
                     .multilineTextAlignment(.center)
                     .foregroundStyle(DesignTokens.blueText)
             }
@@ -43,10 +45,11 @@ struct InstructionsPopup: View {
 
             Button(action: action) {
                 Text(buttonTitle)
-                    .font(.custom("InterVariable", size: 18))
+                    .font(DesignTokens.Typography.button)
                     .foregroundStyle(DesignTokens.whiteText)
+                    .fitsOneLine(minimumScale: 0.7)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+                    .frame(minHeight: 44)
                     .background(Capsule().fill(DesignTokens.secondaryBlue))
                     .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
                     .contentShape(Capsule())

@@ -20,6 +20,7 @@ are; RealityKit puts pixels there.
 let configuration = ARWorldTrackingConfiguration()
 configuration.detectionImages = referenceImages
 configuration.maximumNumberOfTrackedImages = referenceImages.count
+configuration.isLightEstimationEnabled = false
 arView.session.run(configuration)
 ```
 
@@ -49,6 +50,29 @@ configuration with its default world-tracking one.
 `referenceImages` is the whole AR resource group, read with
 `ARReferenceImage.referenceImages(inGroupNamed:bundle:)`. Nothing enumerates individual cards:
 the group is the list, and everything else is derived from it.
+
+### Lighting
+
+`isLightEstimationEnabled` is on by default and is switched **off** here. It is the fix for "the
+model is dark up close and bright further away".
+
+Enabled, ARKit measures a single `ambientIntensity` for the whole camera frame each update —
+0 for very dark, ~1000 for a well-lit room, ~2000 for very bright — and RealityKit scales the
+environment lighting by it. That number is a reading of the *framing*, not of the light falling on
+the card. Leaning in fills the frame with one dark printed card and puts the phone's own shadow
+across it, so the estimate collapses and every model dims; pulling back lets the ceiling and walls
+in and it jumps straight back up. The model's brightness ends up tracking how the phone is being
+held, which is the symptom.
+
+`environmentTexturing` is left at its default of `.none` for the same reason it always was: a real
+room probe costs CPU on every frame and would only reintroduce the same dependence on what the
+camera happens to be pointing at.
+
+With the estimate off there is nothing to publish, and the fixed environment built by
+`Coordinator.studioEnvironment()` is the only thing lighting the scene. That is a deliberate trade:
+models no longer match the room's own light, and in exchange they look the same in every room and
+at every distance. See "How models are actually lit" in `docs/models.md` for the environment
+itself, its dial, and the near-black domes stripped out of the assets.
 
 ## Anchors
 

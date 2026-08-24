@@ -98,6 +98,54 @@ private let cardMaskBleed: Float = 1.06
 /// without this a model with a flat bottom face co-planar with the mask would z-fight against it.
 private let cardMaskDrop: Float = 0.001
 
+// MARK: - Lighting
+
+/// Brightness of the key light, in lux — RealityKit's own default for a directional light, which is
+/// tuned against the albedo an ordinary texture has.
+///
+/// **This is the light that cannot fail**, and it is why the scene can no longer come up black. The
+/// environment below is an `EnvironmentResource` built at run time from a generated image, and every
+/// step of that can go wrong on a device in a way nothing here would report; a directional light is
+/// a number in a component. If the environment is missing the models are lit harshly, from one side,
+/// with black shadow faces — but they are *lit*, and that is a bug you can see and describe rather
+/// than a dark screen.
+private let keyLightIntensity: Float = 2145.7078
+
+/// Which way the key light shines, as a rotation about the x axis applied to the light's own -z.
+///
+/// `-90°` would be straight down. Backing off to `-70°` tips it toward the camera's start-of-session
+/// facing, so the fronts of the models catch it too and the tops are not the only lit surface.
+private let keyLightPitch: Float = -70 * .pi / 180
+
+/// Brightness of the environment every model is lit by, as a power of two: `+1` is twice as
+/// bright, `-1` half as bright, `0` the environment as authored below.
+///
+/// **The dial for "the models are too dark".** An exponent because that is the unit
+/// `ARView.Environment.ImageBasedLight` takes, and because a stop reads evenly at both ends of the
+/// range in a way a linear multiplier does not. It moves the ambient fill only — `keyLightIntensity`
+/// is the other half, and the one to reach for if the shadow sides are what is too dark.
+private let environmentIntensityExponent: Float = 0
+
+/// The sky the models are lit by, from straight up to straight down.
+///
+/// Deliberately a gradient rather than one flat colour: a uniform environment lights every face of
+/// a model identically, which erases its form and makes it read as a flat cut-out pasted on the
+/// camera image. Brighter above than below is what puts a highlight on the tops of the corals and
+/// leaves a shadow under them.
+///
+/// Neutral greys on purpose. The models' textures are baked and already carry their own colour, so
+/// a tinted environment would cast that tint over work that has been authored to look right.
+private let skyZenithColor = UIColor(white: 1.00, alpha: 1)
+private let skyHorizonColor = UIColor(white: 0.72, alpha: 1)
+private let skyGroundColor = UIColor(white: 0.30, alpha: 1)
+
+/// Size of the equirectangular image the environment is built from.
+///
+/// Small on purpose. RealityKit convolves this into diffuse and specular cube maps once, at start,
+/// and a three-stop vertical gradient holds no detail a larger image could preserve — it would
+/// only cost more to convolve.
+private let skyImageSize = (width: 256, height: 128)
+
 // MARK: - Status
 
 /// The two things the AR session tells `ContentView` to draw.
@@ -328,6 +376,20 @@ extension PostcardARView {
                 configuration.frameSemantics.insert(.personSegmentationWithDepth)
             }
 
+            // Off, and this is the fix for "the model is dark up close and bright further away".
+            //
+            // Enabled — which is the default, and what this ran with until now — ARKit measures one
+            // `ambientIntensity` for the *whole camera frame* each update and RealityKit scales the
+            // environment by it. That estimate is a reading of the framing, not of the light on the
+            // card: leaning in fills the frame with one dark printed card and puts the phone's own
+            // shadow across it, so the estimate collapses and every model dims; pulling back lets
+            // the ceiling and the walls in and it jumps straight back up. The model's brightness
+            // ends up tracking how the phone is being held.
+            //
+            // With it off there is no estimate to publish, and `studioEnvironment()` below is the
+            // only thing lighting the scene — the same in every room, at every distance.
+            configuration.isLightEstimationEnabled = false
+
             // Prefer a video format whose *still* pipeline is meaningfully higher-resolution than
             // its stream, so `scanForQRAtHighResolution()` actually gains something — not every
             // format offers one. Guarded on frame rate: dropping the stream to 30 fps to help an
@@ -341,6 +403,24 @@ extension PostcardARView {
 
             arView.session.delegate = self // For errors only — see the note on the render loop.
             arView.session.run(configuration)
+
+            // Our own sky, in place of the one ARKit was deriving from the camera. `nil` if it
+            // could not be built, which leaves RealityKit's own default environment — dimmer and
+            // flatter, but still constant, since the light estimate is off either way.
+            //
+            // **Read once, written once, on purpose.** `ARView.environment` is a *struct* behind a
+            // get/set pair, so `arView.environment.lighting.resource = x` is a whole read-modify-
+            // write of the environment — background, lighting and reverb together. Two of those in
+            // a row means the second one writes back whatever the getter handed it for the fields
+            // the first one set, and `background` is the field that matters: lose it and the
+            // passthrough camera is replaced by a flat colour, which reads as the app having gone
+            // completely dark rather than as a lighting bug. Setting `.cameraFeed()` explicitly in
+            // the same write says what the background is rather than trusting it to survive.
+            var environment = arView.environment
+            environment.background = .cameraFeed()
+            environment.lighting.resource = studioEnvironment()
+            environment.lighting.intensityExponent = environmentIntensityExponent
+            arView.environment = environment
 
             self.arView = arView
             pinch.attach(to: arView)
@@ -356,6 +436,16 @@ extension PostcardARView {
             // the visible tree even when their own image anchor goes untracked.
             let worldRoot = AnchorEntity(world: .zero)
             arView.scene.addAnchor(worldRoot)
+
+            // The key light, and the reason a missing environment can no longer black the scene out
+            // — see `keyLightIntensity`. A *child* of the anchor, never the anchor itself: an
+            // `AnchorEntity`'s transform is RealityKit's to write, so the rotation has to go
+            // somewhere it will survive. A directional light shines along its entity's -z, so
+            // pitching that down is the whole aim.
+            let keyLight = Entity()
+            keyLight.components.set(DirectionalLightComponent(intensity: keyLightIntensity))
+            keyLight.orientation = simd_quatf(angle: keyLightPitch, axis: [1, 0, 0])
+            worldRoot.addChild(keyLight)
 
             // Every anchor goes in up front. An image anchor draws nothing and costs nothing
             // until ARKit tracks its image, so the ones not on camera are free.
@@ -747,6 +837,55 @@ extension PostcardARView {
             let entity = ModelEntity(mesh: mesh, materials: [material])
             entity.position.y = -cardMaskDrop
             return entity
+        }
+
+        /// The fixed environment every model is lit by — see `skyZenithColor` and
+        /// `environmentIntensityExponent` for the dials.
+        ///
+        /// **Built in code from three colours rather than bundled as an `.exr`.** The whole thing
+        /// is a vertical gradient, so an authored file would carry nothing this does not and would
+        /// be one more asset to keep in step with a lighting change made here.
+        ///
+        /// Equirectangular: the image is unwrapped onto a sphere, its top row straight up and its
+        /// bottom row straight down, so a top-to-bottom gradient is a sky. Its width is never
+        /// sampled unevenly here — every column is identical — which is why 256 × 128 is enough.
+        ///
+        /// `CGContext`'s origin is bottom-left while the image's first row is its top, so the
+        /// gradient is drawn from `y = height` (the zenith) down to `y = 0` (the ground).
+        private func studioEnvironment() -> EnvironmentResource? {
+            let colors = [skyZenithColor.cgColor, skyHorizonColor.cgColor, skyGroundColor.cgColor]
+            guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+                  let context = CGContext(data: nil,
+                                          width: skyImageSize.width,
+                                          height: skyImageSize.height,
+                                          bitsPerComponent: 8,
+                                          bytesPerRow: 0,
+                                          space: space,
+                                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue),
+                  let gradient = CGGradient(colorsSpace: space,
+                                            colors: colors as CFArray,
+                                            locations: [0, 0.5, 1])
+            else {
+                report("Could not build the scene environment. Models will be lit by RealityKit's default.")
+                return nil
+            }
+
+            context.drawLinearGradient(gradient,
+                                       start: CGPoint(x: 0, y: skyImageSize.height),
+                                       end: .zero,
+                                       options: [])
+
+            guard let image = context.makeImage() else {
+                report("Could not build the scene environment. Models will be lit by RealityKit's default.")
+                return nil
+            }
+
+            do {
+                return try EnvironmentResource(equirectangular: image)
+            } catch {
+                report("Could not build the scene environment: \(error.localizedDescription)")
+                return nil
+            }
         }
     }
 }

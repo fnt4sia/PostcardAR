@@ -242,7 +242,7 @@ once a rendered frame whether the card it belongs to is on screen, and it decide
     │      (nothing kept)              │            │            │              │
     │                    card gone, no hand in frame │            │         Play Again
     │                                  ▼            ▼            ▼              │
-    └────────── 3 s elapsed ────────── grace ◀───────┴────────────┘              │
+    └────────── 5 s elapsed ────────── grace ◀───────┴────────────┘              │
                                          │                                       │
                                          └── card back ──▶ resume ◀──────────────┘
                                              (same score, same clock)
@@ -254,7 +254,7 @@ once a rendered frame whether the card it belongs to is on screen, and it decide
 | `instructions` | dimmed panel, what to do, **Start** | yes | straight to `idle`, no grace |
 | `countdown` | 3 · 2 · 1 | yes | `grace` |
 | `playing` | clock and score HUD, pieces grabbable | yes | `grace` |
-| `grace` | "point at the card again" and 3 · 2 · 1 | it is what is being waited for | — |
+| `grace` | "point at the card again" and a countdown | it is what is being waited for | — |
 | `finished` | score, **Play Again** / **Close** — reached by the clock running out *or* by clearing the card | no | — |
 
 **`idle` and `finished` are the only phases the card can leave freely.** On the result screen the
@@ -298,10 +298,10 @@ model stay grabbable, so a hand across the card mid-grab costs nothing.
 **Card lost, no hand.** The model hides, and the run enters `grace`:
 
 - All the run's own clocks stop. `timeLeft` is untouched, and so is `score`.
-- `graceLeft` counts down from `graceDuration` (3 s).
-- The card coming back inside those 3 s returns the run to the phase it left — `countdown` or
+- `graceLeft` counts down from `graceDuration` (5 s).
+- The card coming back inside those 5 s returns the run to the phase it left — `countdown` or
   `playing` — with the same score and the same time remaining.
-- The 3 s elapsing calls `reset()`: phase `idle`, score 0, clocks back to full. The next
+- The 5 s elapsing calls `reset()`: phase `idle`, score 0, clocks back to full. The next
   simulation card seen starts a completely fresh run.
 
 The timer pausing rather than draining is deliberate. Losing the card is not the player's doing,

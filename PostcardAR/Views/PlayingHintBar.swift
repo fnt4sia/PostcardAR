@@ -17,8 +17,14 @@ struct PlayingHintBar: View {
                 .frame(width: size.width, height: size.height)
 
             Text(text)
-                .font(.custom("JetBrainsMono-Regular", size: 20))
+                .font(DesignTokens.Typography.hint)
                 .foregroundStyle(DesignTokens.whiteText)
+                // The bar is a fixed-size image, so the hint has to give rather than wrap out of
+                // it. Two lines, because the longest hint is a full sentence.
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
                 .offset(y: 8)
         }
         .frame(width: size.width, height: size.height)

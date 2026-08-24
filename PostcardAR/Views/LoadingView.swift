@@ -54,10 +54,11 @@ struct LoadingView: View {
         VStack(spacing: 20) {
             VStack(spacing: 8) {
                 Text("LOADING")
-                    .font(.custom("JetBrainsMono-Bold", size: 44))
+                    .font(DesignTokens.Typography.loadingTitle)
+                    .fitsOneLine(minimumScale: 0.5)
                     .foregroundStyle(DesignTokens.blackText)
                 Text(subtitle)
-                    .font(.custom("JetBrainsMono-Regular", size: 18))
+                    .font(DesignTokens.Typography.monoBody)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(DesignTokens.blackText)
                     .contentTransition(.numericText())

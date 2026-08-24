@@ -45,6 +45,10 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: isScanning)
+        // The one place Dynamic Type is capped, for the whole app. Every screen below — including
+        // the run's overlays over the camera — inherits it through the environment. See
+        // `DesignTokens.maximumDynamicTypeSize`.
+        .accessibleLayout()
     }
 }
 
@@ -60,6 +64,10 @@ private struct ScannerScreen: View {
     /// Replaces `@Environment(\.dismiss)` — that only exists inside a real presentation
     /// (`.sheet`/`.fullScreenCover`), and this screen is a plain conditional now. See `ContentView`.
     let close: () -> Void
+
+    /// The close button grows with the system text size like everything else, but it sits over the
+    /// camera rather than inside a traced card, so it has room to.
+    @ScaledMetric(relativeTo: .title) private var closeButtonSize: CGFloat = 34
 
     @State private var status = ARStatus()
     @State private var game = GameSession()
@@ -78,7 +86,7 @@ private struct ScannerScreen: View {
                         close()
                     } label: {
                         Image(systemName: "x.circle.fill")
-                            .font(.system(size: 34))
+                            .font(.system(size: closeButtonSize))
                             .symbolRenderingMode(.palette)
                             .foregroundStyle(.white, .secondaryBlue.opacity(1))
                     }

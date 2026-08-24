@@ -12,6 +12,9 @@ struct GraceCard: View {
 
     @State private var pulsed = false
 
+    /// Grows with the text beside it — see the note at the icon.
+    @ScaledMetric(relativeTo: .largeTitle) private var iconSize: CGFloat = 44
+
     private let cardSize = CGSize(width: 344, height: 439.018)
 
     var body: some View {
@@ -30,22 +33,28 @@ struct GraceCard: View {
     private var content: some View {
         VStack(spacing: 15) {
             Image(systemName: "viewfinder")
-                .font(.system(size: 44))
+                // `@ScaledMetric` rather than a `Font` token: `Font.system(size:)` is genuinely
+                // fixed, so an SF Symbol sized that way is the one thing on the card that would
+                // not grow with the words beside it.
+                .font(.system(size: iconSize))
                 .symbolEffect(.pulse)
                 .foregroundStyle(DesignTokens.blueText)
 
             Text(title)
-                .font(.custom("JetBrainsMono-Bold", size: 34))
+                .font(DesignTokens.Typography.panelTitle)
+                .fitsBlock()
                 .multilineTextAlignment(.center)
                 .foregroundStyle(DesignTokens.whiteText)
 
             Text(message)
-                .font(.custom("InterVariable", size: 18))
+                .font(DesignTokens.Typography.body)
+                .fitsBlock()
                 .multilineTextAlignment(.center)
                 .foregroundStyle(DesignTokens.blueText)
 
             Text("\(secondsRemaining)")
-                .font(.custom("JetBrainsMono-Bold", size: 60))
+                .font(DesignTokens.Typography.graceValue)
+                .fitsOneLine(minimumScale: 0.5)
                 .contentTransition(.numericText(countsDown: true))
                 .scaleEffect(pulsed ? 1.15 : 1)
                 .animation(.snappy, value: secondsRemaining)

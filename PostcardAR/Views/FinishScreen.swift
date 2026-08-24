@@ -31,17 +31,19 @@ struct FinishScreen: View {
             VStack(spacing: 15) {
                 VStack(spacing: 0.5) {
                     Text(label)
-                        .font(.custom("JetBrainsMono-Regular", size: 18))
+                        .font(DesignTokens.Typography.resultLabel)
                         .foregroundStyle(Color(hex: 0x585757))
 
                     Text(value)
-                        .font(.custom("JetBrainsMono-Bold", size: 72))
+                        .font(DesignTokens.Typography.resultValue)
+                        .fitsOneLine(minimumScale: 0.5)
                         .foregroundStyle(DesignTokens.progressGradient)
                         .contentTransition(.numericText())
                         .animation(.snappy, value: value)
 
                     Text(title)
-                        .font(.custom("JetBrainsMono-Bold", size: 28))
+                        .font(DesignTokens.Typography.resultTitle)
+                        .fitsBlock()
                         .foregroundStyle(DesignTokens.blackText)
                         .padding(.top, 8)
                 }
@@ -62,10 +64,11 @@ struct FinishScreen: View {
 
                     Button(action: finishAction) {
                         Text(finishButtonTitle)
-                            .font(.custom("InterVariable", size: 18))
+                            .font(DesignTokens.Typography.button)
                             .foregroundStyle(DesignTokens.whiteText)
+                            .fitsOneLine(minimumScale: 0.7)
                             .padding(.horizontal, 20)
-                            .frame(height: 44)
+                            .frame(minHeight: 44)
                             .background(Capsule().fill(DesignTokens.secondaryBlue))
                             .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
                             .contentShape(Capsule())

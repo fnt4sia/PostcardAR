@@ -137,6 +137,60 @@ else is in your .usdz" in [models.md](models.md), including how to dump an asset
 Note that file size proves nothing here: the shipped 9 MB coral froze the camera, a 52 MB model
 did not.
 
+### The model dims as I lean in and brightens as I pull back
+
+`configuration.isLightEstimationEnabled` got switched back on, or defaulted back on because that
+line was dropped. ARKit then measures one `ambientIntensity` for the whole camera frame and
+RealityKit scales the environment by it, so the model's brightness tracks the framing rather than
+the light on the card. See "Lighting" in [tracking.md](tracking.md).
+
+### The whole screen is black — no camera, no models
+
+Not a lighting bug, despite looking like the worst possible one. The **background** was lost, so the
+passthrough camera is no longer being drawn.
+
+`ARView.environment` is a struct behind a get/set pair, so `arView.environment.lighting.resource = x`
+reads the whole environment, changes one field and writes it all back — background and reverb
+included. Two such statements in a row and the second writes back the getter's idea of what the
+first one set. `start(in:)` therefore reads it into a local, sets `background`, `lighting.resource`
+and `lighting.intensityExponent` on that, and assigns the whole thing back **once**. Keep it that
+way, and keep the explicit `.cameraFeed()` — it costs nothing and it states what the background is
+instead of hoping it survives.
+
+If models are lit but the camera is black, this is where to look. If the camera is fine and the
+models are dark, see below.
+
+### Every model is nearly black
+
+Three candidates, in order.
+
+1. **The key light went away.** `start(in:)` parents a `DirectionalLightComponent` to `worldRoot`,
+   and it is the one source that cannot fail to build. Removing it leaves the models on the ambient
+   environment alone, which is dim by design and gone entirely if the environment failed to build.
+2. **A dome light got through.** Every `.usdz` here ships a Blender world as a near-black
+   `DomeLight`, and since iOS 18 RealityKit imports one as an `ImageBasedLightComponent` that
+   *overrides* the scene environment for its whole subtree. `removeImportedLighting(from:)` strips
+   it at load; if that call went away, `arView.environment.lighting` stops reaching the models
+   entirely. Check with `unzip -l model.usdz | grep textures/color_` — a `color_0C0C0C.exr` is a
+   #0C0C0C sky.
+3. **It is simply too dim.** Raise `environmentIntensityExponent` in `PostcardARView.swift` — `+1`
+   is twice as bright — or `keyLightIntensity` if the shadow sides are the problem, or lift the
+   three sky colours.
+
+All three are covered in "How models are actually lit" in [models.md](models.md).
+
+The console is worth a look first: `Could not build the scene environment` means the ambient half
+never loaded and only the key light is running, which narrows it to one thing.
+
+### The models look flat, like stickers on the lens
+
+If they are lit but shapeless, the environment has gone uniform: `skyZenithColor`,
+`skyHorizonColor` and `skyGroundColor` are all near the same value, so every face of the model
+receives the same light and nothing reads as form. Spread them apart — bright above, dark below.
+
+If they are lit *and* shaped but still sit oddly on the table, that is people occlusion, not
+lighting — see below.
+
 ### The model shivers when the card is still
 
 Expected without filtering, and the filter is tuned by three constants — see
@@ -221,7 +275,7 @@ ever set from a tracked card, so the card is provably there.
 
 ### The run restarted from zero when I looked away
 
-The card left the frame with no hand in it either, and stayed away longer than the 3 s grace
+The card left the frame with no hand in it either, and stayed away longer than the 5 s grace
 period. Inside those 3 s the score and the clock are held and the card coming back resumes exactly
 where it left; past them the run is wiped and the next scan is a fresh one.
 

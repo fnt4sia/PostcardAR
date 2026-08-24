@@ -194,6 +194,20 @@ passes `card.pivot`. That matters: the model carries `fit(_:named:)`'s scale fac
 took to bring that particular `.usdz` to its target width — so building inside it would make every
 metre constant here a function of the asset's authored units. The pivot is plain metres.
 
+### Both markers ignore the tone map
+
+The dot and the leader line wear `annotationMarkerMaterial()`, an `UnlitMaterial` built with
+`applyPostProcessToneMap: false`.
+
+Unlit is not enough on its own. An ordinary `UnlitMaterial` still goes through the renderer's filmic
+tone map on the way to the screen, and that curve rolls off the top of its range — a marker authored
+at pure `#FFFFFF` lands somewhere around light grey, which against a bright reef is close to
+invisible. Turning the tone map off for these two is what makes white actually white.
+
+They are the only things in the scene exempted from it, and deliberately: the models are meant to be
+graded like the camera image they sit in, but a dot that says *press here* is interface, not
+scenery.
+
 ### The leader line
 
 A thin box, stretched to the gap and rotated onto it: `generateBox` builds along +z, so

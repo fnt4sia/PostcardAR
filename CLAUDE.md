@@ -71,14 +71,14 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 | Path | Purpose |
 |---|---|
 | `PostcardAR/ContentView.swift` | Start button, the loading/camera swap, and the run's UI (instructions, countdown, HUD, grace, result) |
-| `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan. Owns `fit`, `removeCameras`, `modelWidths` |
+| `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan. Owns `fit`, `removeCameras`, `removeImportedLighting`, `modelWidths` |
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
 | `PostcardAR/QRCardIdentity.swift` | Decoding the QR that names a card's model |
 | `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — the grabbable pool, both minigames' grab/release rules, hand-pose sampling, haptics |
 | `PostcardAR/Annotations.swift` | Explanation labels: finding `ANNO*` entities, reading their JSON, and building the billboarded panels into the scene |
-| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the run, the 3 s grace. Shared by both minigames |
+| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the run, the 5 s grace. Shared by both minigames |
 | `PostcardAR/Minigame.swift` | The two games' settings: run length and every word the player reads. One block per game |
-| `PostcardAR/Views/` | The Figma-traced screens — home, loading, instructions, countdown, HUD, result — and `DesignTokens` |
+| `PostcardAR/Views/` | The Figma-traced screens — home, loading, instructions, countdown, HUD, result — and `DesignTokens`, which owns every colour and every font token |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<model name>.usdz` | A model a QR can name — see `docs/models.md` for what makes one usable |
 | `PostcardAR/<model name>.json` | Annotation text for that model, if it has any — see `docs/annotations.md` |
@@ -93,10 +93,10 @@ Documentation is split by area, and each file owns its topic:
 |---|---|
 | `docs/reference-images.md` | The AR resource group, physical size, what makes an image trackable |
 | `docs/card-identity.md` | Which model goes on a card: the QR payload, the binding, and why it outlives the payload |
-| `docs/models.md` | `.usdz` naming, scaling to the card, weight budget, imported scene contents |
-| `docs/tracking.md` | Session, anchors, entity hierarchy, render loop, the occlusion lock, people occlusion |
+| `docs/models.md` | `.usdz` naming, scaling to the card, weight budget, imported scene contents, how models are lit |
+| `docs/tracking.md` | Session, anchors, entity hierarchy, render loop, the occlusion lock, people occlusion, the light estimate |
 | `docs/smoothing.md` | The dead band and glide filter, and its three constants |
-| `docs/app-shell.md` | SwiftUI, the `UIViewRepresentable` bridge, the screen flow |
+| `docs/app-shell.md` | SwiftUI, the `UIViewRepresentable` bridge, the screen flow, type and Dynamic Type |
 | `docs/interaction.md` | Pinch pickup: Vision hand-pose sampling, grab/drag/release, tuning |
 | `docs/simulation.md` | Card kinds, which minigame a model is, both games' rules, the run's phases and clocks, scoring |
 | `docs/annotations.md` | Explanation labels: the `ANNO*`/JSON pairing, the ring layout, and why a panel is a texture rather than a SwiftUI view |
@@ -229,6 +229,52 @@ not. Without it every model is painted over the camera image and reads as a stic
 People only — the card, the table, and everything else still get drawn over. Occluding against
 arbitrary geometry is `sceneUnderstanding.options.occlusion`, LiDAR-only, and is not used here.
 
+## Lighting
+
+**Fixed, and deliberately deaf to the room.** `configuration.isLightEstimationEnabled = false`, and
+two things light the scene in its place:
+
+1. **A key `DirectionalLightComponent`** on a child of `worldRoot`, at RealityKit's own default
+   2145.7 lux, pitched 70° down so it also catches the fronts of the models. A child, never the
+   anchor itself — an `AnchorEntity`'s transform is RealityKit's to write.
+2. **An ambient environment**, built by `Coordinator.studioEnvironment()`: a three-stop vertical
+   gradient (`skyZenithColor`/`skyHorizonColor`/`skyGroundColor`) rendered to a 256 × 128 `CGImage`,
+   turned into an `EnvironmentResource(equirectangular:)`, and assigned to
+   `arView.environment.lighting.resource`. `environmentIntensityExponent` scales it as a power of
+   two.
+
+**The key light is load-bearing and must not be removed to "simplify".** The environment is built at
+run time out of a generated image and an `EnvironmentResource` initialiser, and every step of that
+can fail on a device in a way nothing on screen explains. A directional light is a number in a
+component. With it there, a failed environment means harsh one-sided lighting with black shadow
+faces — a bug you can see and describe. Without it, it meant a black screen.
+
+`environmentIntensityExponent` moves the ambient fill; `keyLightIntensity` moves the key. Reach for
+the second if the *shadow* sides are what is too dark.
+
+**`arView.environment` is read once and written once.** It is a struct behind a get/set pair, so
+`arView.environment.lighting.resource = x` is a read-modify-write of background, lighting and reverb
+together — two of those in a row and the second writes back whatever the getter gave it for what the
+first one set. `background` is the field that matters: lose it and the passthrough camera is
+replaced by a flat colour, which reads as the whole app going dark rather than as a lighting bug. It
+is set to `.cameraFeed()` explicitly in the same write rather than trusted to survive.
+
+`isLightEstimationEnabled` defaults to **on**, and leaving it there is what made models dark up
+close and bright further away: ARKit measures one `ambientIntensity` for the whole camera frame and
+RealityKit scales the environment by it, so the estimate reads the *framing* rather than the light
+on the card. Leaning in fills the frame with one dark card under the phone's own shadow and the
+estimate collapses; pulling back lets the ceiling in and it jumps back. Brightness ended up
+tracking how the phone was held. Do not turn it back on without replacing that behaviour.
+
+A gradient rather than a flat colour, because a uniform environment lights every face identically
+and the model reads as a flat cut-out. Neutral greys, because the textures are baked and already
+carry their own colour. `environmentTexturing` stays `.none`: a real room probe costs per-frame CPU
+and only reintroduces the same dependence on where the camera is pointing.
+
+The trade is explicit — models no longer match the room's own light, and in exchange they look the
+same in every room and at every distance. Full account in `docs/models.md`; the estimate itself in
+`docs/tracking.md`.
+
 ## Render loop, not session delegate
 
 Per-frame work runs on `arView.scene.subscribe(to: SceneEvents.Update.self)`.
@@ -298,6 +344,34 @@ Measure *finger segments*, never the span of the whole hand — the wrist and pa
 first, so a whole-hand measure collapses exactly when the hand is closest. Hysteresis is
 one-directional (5 samples in, instant out), and a live grip is excluded, because the wrist/knuckle
 guard fails routinely mid-pinch and would otherwise blur every drag. See `docs/interaction.md`.
+
+## Type and Dynamic Type
+
+Every font is a token in `DesignTokens.Typography`; no screen calls `Font.custom` with a literal
+size. That collection is not tidying — it is the fix. **`Font.custom(_:size:)` is not a fixed size**:
+it scales with the system text setting, relative to `.body`, whatever size it is handed. Right for
+an 18 pt paragraph, wrong for a 164 pt numeral — body grows ~130% at the largest accessibility
+setting, which put the countdown digit on course for 380 pt inside a 282 pt card. Each token now
+names the text style it resembles, so each size grows on its own curve.
+
+Three pieces, all required:
+
+1. **The tokens**, each pinned with `relativeTo:`.
+2. **`accessibleLayout()`**, applied *once* on `ContentView`'s root — never per screen — capping at
+   `DesignTokens.maximumDynamicTypeSize`.
+3. **`fitsOneLine()` / `fitsBlock()`** wherever the geometry around the text is fixed.
+
+**The cap is `.xxxLarge`, and it was measured by running the screens, not judged.** At
+`.accessibility1` the instructions card puts its title above the card's top edge and its Start
+button below the bottom one — the content is taller than 439 pt by then, and shrinking inside the
+column cannot fix a column that has run out of card. The cards are fixed-size Figma images, so
+raising the cap means **giving the cards room first**, not moving the number up.
+
+`fitsBlock()` earns its place on a specific failure: a fixed-height card that cannot fit its column
+makes SwiftUI *truncate* the most compressible text in it, which on these panels is the title —
+"POINT AT THE CARD AGAIN" came out as "POINT AT THE CARD…". SF Symbols use `@ScaledMetric` rather
+than a font token, because `Font.system(size:)` genuinely does not scale. Full account in
+`docs/app-shell.md`.
 
 ## Card kinds and the run
 
@@ -455,11 +529,14 @@ RealityKit turns a USD `Camera` prim into a real `PerspectiveCamera` entity, and
 an `ARView` scene hands rendering to it — **the passthrough camera freezes**, with no error and
 nothing in the log. `ModelLibrary.removeCameras(from:)` strips them at load time; do not remove that call.
 
-Imported lights come in as inert entities and are left alone — **a Blender light in a `.usdz`
-lights nothing here, and no setting changes that.** `ARView(cameraMode: .ar)` lights the scene from
-ARKit's environment probe, i.e. the real room, which is what makes a model look like it is on the
-table. Bake lighting into textures (as `BakedBaseColor`/`BakedCoral_*`/`Bake_Sand` already do), or
-add a real `DirectionalLightComponent`/`PointLightComponent`/`SpotLightComponent` in code.
+Imported *punctual* lights — sphere, distant, rect — come in as inert entities and are left alone:
+a Blender point light in a `.usdz` lights nothing here, and no setting changes that. **The
+`DomeLight` is the exception and is not inert.** Since iOS 18 RealityKit imports one as an
+`ImageBasedLightComponent`, which *overrides* the scene environment for its whole subtree — so
+whatever `arView.environment.lighting` is set to stops reaching that model, silently. Every `.usdz`
+here ships one and all of them are near-black (`color_0C0C0C.exr`, `color_191C21.exr`), which is
+why the models rendered almost black. `ModelLibrary.removeImportedLighting(from:)` strips them at
+load, beside `removeCameras`; do not remove that call either.
 
 **Nothing auto-plays either.** RealityKit imports animation into `Entity.availableAnimations` and
 leaves it *stopped*. `Coordinator.play(in:)` starts every clip looping at load, walking the whole
