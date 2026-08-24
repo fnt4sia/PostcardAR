@@ -140,6 +140,44 @@ hand-pose rate that `handPoseLossTimeout` and the occlusion lock are tuned again
 The request is restricted to `[.qr]`. `DetectBarcodesRequest` scans for every symbology it is
 handed, and the other thirty-odd are pure per-frame cost here.
 
+## Resolution, and the one-off high-resolution scan
+
+The iPhone's Camera app reads a QR from much further away than this does, and the reason is
+pixels, not cleverness: it runs its detector on a full-resolution capture, while ARKit hands
+Vision `capturedImage` at the video format's size — commonly 1920 × 1440. QR decoding is bounded
+by *pixels per module*, so a 2× resolution gap is a 2× distance gap.
+
+Vision wants roughly four to five pixels per module. These payloads produce 25–29 module codes at
+error correction level H, so the code needs about **145 px** in the captured frame. At 1920 px
+across roughly 60° of field of view that is about 4 cm of printed QR at half a metre.
+
+`PinchInteraction.scanForQRAtHighResolution()` closes the gap without paying for it continuously.
+`ARSession.captureHighResolutionFrame()` returns a single frame from the *still* pipeline — around
+4032 px across — while the video stream carries on unchanged. Roughly 2.1× the linear resolution,
+so roughly half the printed size.
+
+**It works because one decode is enough.** A binding outlives its payload, so a card only ever
+needs to be read once. `onRenderFrame()` fires this only while `bound == nil` *and* an anchor is
+tracked, paced by `highResolutionScanInterval`, and it stops the instant a model appears. A still
+capture is far too expensive to run continuously and does not have to be.
+
+Two things keep it honest:
+
+- **It does not feed `decodeRate`.** That window is a statistic about the video stream, answering
+  "is a code this size readable during normal running" — which is the question the printed card's
+  design turns on. Folding occasional still frames in would report a code as fine at a size the
+  stream can never read.
+- **The video format is only upgraded if it is free.** Not every format's still pipeline beats its
+  stream, so `start(in:)` switches to
+  `recommendedVideoFormatForHighResolutionFrameCapturing` when the default is not one — but only
+  if it does not cost frame rate. Dropping the stream to 30 fps would trade tracking smoothness,
+  which every card pays for all the time, against a QR read that has to succeed once.
+
+What is *not* available here: `configurableCaptureDeviceForPrimaryCamera` returns nil when the
+primary camera is used for tracking, which under `ARWorldTrackingConfiguration` it is. So exposure
+and focus cannot be tuned for the code — autofocus hunting shows up as blur, and blur is not
+something more pixels fix.
+
 ## Reading the status panel
 
 Two separate lines, so a failure can be attributed:
@@ -179,3 +217,10 @@ the other is state the app acts on.
 |---|---|---|
 | `decodeRateWindow` | 30 samples (2 s) | how far back `decodeRate` averages |
 | `payloadHoldSamples` | 15 samples (1 s) | how long a name survives after the last sample that read it |
+
+`highResolutionScanInterval` (1 s) lives in `PinchInteraction.swift`, beside the sampler it
+escalates from.
+
+If a code still will not read, the levers are, cheapest first: print it bigger; shorten the
+payload (a shorter model name drops the code a version, so 29 modules become 25 or 21); drop error
+correction from H to M, at the cost of tolerating less handling damage.

@@ -220,7 +220,12 @@ private struct ScannerScreen: View {
             // 25–29 modules, so ~145 px is the number to beat. Walk the card back until the rate
             // collapses; the last size shown is the practical floor. Remove with the `ARStatus`
             // fields it reads.
-            Label("\(status.qrPixelWidth.map { "QR \(Int($0))px" } ?? "QR —") · frame \(status.cameraResolution)",
+            // The frame width shown is the one the decode was *measured* in, so it also says
+            // which pipeline read the code: the video stream's width, or the much larger still
+            // from `scanForQRAtHighResolution()`.
+            Label("\(status.qrPixelWidth.map { "QR \(Int($0))px" } ?? "QR —")"
+                  + "\(status.qrImageWidth.map { " in \(Int($0))" } ?? "")"
+                  + " · video \(status.cameraResolution)",
                   systemImage: "ruler")
                 .foregroundStyle(.cyan)
 

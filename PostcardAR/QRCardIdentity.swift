@@ -120,12 +120,35 @@ struct QRCardIdentity {
         // at an angle reports its own edge instead of the axis-aligned box around it. Held after
         // the last decode for the same reason `payload` is — the reading matters most at the
         // distance where decoding has just started to fail.
-        if let observation {
-            let topLeft = observation.topLeft.toImageCoordinates(imageSize, origin: .upperLeft)
-            let topRight = observation.topRight.toImageCoordinates(imageSize, origin: .upperLeft)
-            let bottomLeft = observation.bottomLeft.toImageCoordinates(imageSize, origin: .upperLeft)
-            pixelWidth = max(hypot(topRight.x - topLeft.x, topRight.y - topLeft.y),
-                             hypot(bottomLeft.x - topLeft.x, bottomLeft.y - topLeft.y))
-        }
+        if let observation { measure(observation, in: imageSize) }
+    }
+
+    /// Records a decode from a one-off high-resolution capture.
+    ///
+    /// **Deliberately does not touch `decodeRate`.** That window is a statistic about the *video
+    /// stream* — it answers "is a QR at this size readable during normal running", which is the
+    /// question the printed card's design turns on. Folding an occasional photo-pipeline frame
+    /// into it would report a code as fine at a size the video stream can never read.
+    ///
+    /// Misses are not fed here at all: a high-resolution scan that found nothing says only that
+    /// the card was not pointed at a code yet, and the video stream is already counting that.
+    mutating func noteHighResolution(_ observations: [BarcodeObservation], in imageSize: CGSize) {
+        guard let observation = observations.first(where: { $0.payloadString != nil }),
+              let decoded = observation.payloadString
+        else { return }
+        payload = decoded
+        missesSinceDecode = 0
+        imageWidth = imageSize.width
+        measure(observation, in: imageSize)
+    }
+
+    /// The code's longest edge in pixels, from its corner points rather than its bounding box —
+    /// so a code held at an angle reports its own edge, not the axis-aligned box around it.
+    private mutating func measure(_ observation: BarcodeObservation, in imageSize: CGSize) {
+        let topLeft = observation.topLeft.toImageCoordinates(imageSize, origin: .upperLeft)
+        let topRight = observation.topRight.toImageCoordinates(imageSize, origin: .upperLeft)
+        let bottomLeft = observation.bottomLeft.toImageCoordinates(imageSize, origin: .upperLeft)
+        pixelWidth = max(hypot(topRight.x - topLeft.x, topRight.y - topLeft.y),
+                         hypot(bottomLeft.x - topLeft.x, bottomLeft.y - topLeft.y))
     }
 }

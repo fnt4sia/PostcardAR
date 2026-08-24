@@ -126,6 +126,7 @@ final class ARStatus {
     /// is small in the world or because ARKit's video format is small in pixels. Remove both, and
     /// their line in `ContentView`, once the QR's working size is settled.
     var qrPixelWidth: Double?
+    var qrImageWidth: Double?
     var cameraResolution = ""
 
     /// How many `.usdz` files have finished loading, out of one per reference image.
@@ -355,6 +356,17 @@ extension PostcardARView {
                 configuration.frameSemantics.insert(.personSegmentationWithDepth)
             }
 
+            // Prefer a video format whose *still* pipeline is meaningfully higher-resolution than
+            // its stream, so `scanForQRAtHighResolution()` actually gains something — not every
+            // format offers one. Guarded on frame rate: dropping the stream to 30 fps to help an
+            // occasional still would trade tracking smoothness, which every card pays for all the
+            // time, against a QR read that has to succeed once.
+            if !configuration.videoFormat.isRecommendedForHighResolutionFrameCapturing,
+               let hiRes = ARWorldTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing,
+               hiRes.framesPerSecond >= configuration.videoFormat.framesPerSecond {
+                configuration.videoFormat = hiRes
+            }
+
             // Diagnostic, temporary. The Camera app reads a QR at full sensor resolution; ARKit
             // hands Vision `capturedImage` at whatever this video format is, which is usually far
             // smaller — and QR decoding is bounded by pixels per module, so the gap is the whole
@@ -363,7 +375,8 @@ extension PostcardARView {
             status.cameraResolution =
                 "\(Int(format.imageResolution.width))×\(Int(format.imageResolution.height))"
             let formats = ARWorldTrackingConfiguration.supportedVideoFormats
-            print("[AR] using \(status.cameraResolution) @\(format.framesPerSecond)fps")
+            let stills = format.isRecommendedForHighResolutionFrameCapturing ? " (hi-res stills)" : ""
+            print("[AR] using \(status.cameraResolution) @\(format.framesPerSecond)fps\(stills)")
             print("[AR] \(formats.count) supported formats:")
             for candidate in formats {
                 let size = candidate.imageResolution
@@ -500,6 +513,14 @@ extension PostcardARView {
             }
             rebind(to: trackedAnchor)
 
+            // A card on camera with nothing bound to it means the QR is the only missing piece,
+            // so ask the still pipeline for a frame the video stream cannot match. Self-limiting:
+            // one success binds, and a binding outlives the payload, so this stops on its own the
+            // moment a model appears. See `docs/card-identity.md`.
+            if bound == nil, trackedAnchor != nil {
+                pinch.scanForQRAtHighResolution()
+            }
+
             for index in cards.indices {
                 // Every model but the bound one stays dark. An unbound pivot has never been posed
                 // and sits at the world origin — the phone's position at session start — so
@@ -580,6 +601,10 @@ extension PostcardARView {
             let qrPixelWidth = pinch.qrPixelWidth
             if status.qrPixelWidth != qrPixelWidth {
                 status.qrPixelWidth = qrPixelWidth
+            }
+            let qrImageWidth = pinch.qrImageWidth
+            if status.qrImageWidth != qrImageWidth {
+                status.qrImageWidth = qrImageWidth
             }
 
             updateGame(cardPresent: activeCardPresent, candidate: trackedSimulation)
