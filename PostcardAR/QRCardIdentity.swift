@@ -33,6 +33,7 @@
 //      `payloadHoldSamples`.
 //
 
+import CoreGraphics
 import Vision
 
 /// How many recent samples `decodeRate` averages over. Thirty at the sampler's 15 Hz is two
@@ -49,7 +50,7 @@ private let decodeRateWindow = 30
 /// statistic being reported, this is a piece of state the app acts on. Note that the *binding*
 /// in `PostcardARView` outlives this hold entirely — a hand over the card stops the decode long
 /// before it stops the game.
-private let payloadHoldSamples = 15
+private let payloadHoldSamples = 45
 
 /// One card name read off the camera, and how reliably it is coming through.
 ///
@@ -79,15 +80,28 @@ struct QRCardIdentity {
     /// motion blur it cannot, and no amount of wiring downstream will fix that.
     private(set) var decodeRate: Double = 0
 
+    /// **Diagnostic, temporary.** The longest edge of the last code that decoded, in pixels of
+    /// the captured frame, and the width of that frame.
+    ///
+    /// Here to answer the one question the decode rate cannot: *how big does the code have to be*.
+    /// Vision wants roughly four to five pixels per module and these codes are 25–29 modules, so
+    /// the number to beat is around 145 px. Only measurable on a sample that decoded — walk the
+    /// card away until the rate collapses and the last reading is the practical floor.
+    private(set) var pixelWidth: CGFloat?
+    private(set) var imageWidth: CGFloat?
+
     private var window: [Bool] = []
     private var missesSinceDecode = 0
 
-    /// Records one sample's worth of observations, decoded or empty.
-    mutating func note(_ observations: [BarcodeObservation]) {
+    /// Records one sample's worth of observations, decoded or empty. `imageSize` is the upright
+    /// frame the corner points are normalised against — needed only by the diagnostic above.
+    mutating func note(_ observations: [BarcodeObservation], in imageSize: CGSize) {
+        imageWidth = imageSize.width
         // First rather than best: `maximumHandCount`'s equivalent does not exist on this request,
         // and one card in frame is the case being measured. Two QRs in view is a step-two problem
         // — it needs the corner points to say which anchor each belongs to.
-        let decoded = observations.compactMap(\.payloadString).first
+        let observation = observations.first { $0.payloadString != nil }
+        let decoded = observation?.payloadString
         if let decoded {
             payload = decoded
             missesSinceDecode = 0
@@ -101,5 +115,17 @@ struct QRCardIdentity {
             window.removeFirst(window.count - decodeRateWindow)
         }
         decodeRate = window.isEmpty ? 0 : Double(window.count(where: { $0 })) / Double(window.count)
+
+        // Diagnostic. Measured off the corner points rather than the bounding box, so a code held
+        // at an angle reports its own edge instead of the axis-aligned box around it. Held after
+        // the last decode for the same reason `payload` is — the reading matters most at the
+        // distance where decoding has just started to fail.
+        if let observation {
+            let topLeft = observation.topLeft.toImageCoordinates(imageSize, origin: .upperLeft)
+            let topRight = observation.topRight.toImageCoordinates(imageSize, origin: .upperLeft)
+            let bottomLeft = observation.bottomLeft.toImageCoordinates(imageSize, origin: .upperLeft)
+            pixelWidth = max(hypot(topRight.x - topLeft.x, topRight.y - topLeft.y),
+                             hypot(bottomLeft.x - topLeft.x, bottomLeft.y - topLeft.y))
+        }
     }
 }

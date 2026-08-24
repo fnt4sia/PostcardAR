@@ -427,6 +427,11 @@ final class PinchInteraction {
     var qrPayload: String? { qr.payload }
     var qrDecodeRate: Double { qr.decodeRate }
 
+    /// **Diagnostic, temporary.** Size of the last code that decoded, and of the frame it was
+    /// measured in — see `QRCardIdentity.pixelWidth`.
+    var qrPixelWidth: Double? { qr.pixelWidth.map(Double.init) }
+    var qrImageWidth: Double? { qr.imageWidth.map(Double.init) }
+
     /// Consecutive samples that read as too close — see `handTooCloseConfirmSamples`.
     private var tooCloseStreak = 0
 
@@ -780,7 +785,7 @@ final class PinchInteraction {
             let hand = results?.0.first
             // Noted every sample, including the ones that read nothing — `decodeRate` is a
             // fraction of samples taken, so skipping the misses would peg it at 100%.
-            qr.note(results?.1 ?? [])
+            qr.note(results?.1 ?? [], in: uprightImageSize)
 
             // Presence is a far looser question than pinching, and has to be asked first. A
             // hand held flat over a card — the case the occlusion lock exists for — is
