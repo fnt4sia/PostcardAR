@@ -2,25 +2,9 @@
 //  HomeView.swift
 //  PostcardAR
 //
-//  Reproduces the Figma "Home" screen (node 253:1487) — the start screen shown before the
-//  camera opens. Wired into ContentView's idle state; `action` starts the scan. All positions
-//  below are the frame-relative coordinates Figma reports for this node, kept 1:1 as points.
-//
-//  The card outline and the two corner grids are drawn from the exact SVGs Figma exports for
-//  those nodes (bundled in Assets.xcassets as HomeCardShape/HomeGridTop/HomeGridBottom),
-//  rather than reconstructed as native shapes — the card is a boolean subtract with a corner
-//  notch that overhangs its own bounding box, and the grids are dashed, gradient-faded lines.
-//  Both are exactly the kind of thing that's cheaper and more faithful to trace from the real
-//  asset than to re-derive from raw coordinates. See docs/figma-design-to-code's rule on
-//  reproducing icons/images from their exported asset rather than hand-authoring them.
-//
-//  Colors/fonts are DesignTokens.swift — shared with InstructionsPopup.
-//
 
 import SwiftUI
 
-/// The start screen: navy background, two faint corner grids, a notched card holding the
-/// title, subtitle, and "Scan a Card" button.
 struct HomeView: View {
     var action: () -> Void = {}
 
@@ -34,7 +18,7 @@ struct HomeView: View {
                 Image("HomeGridTop")
                     .resizable()
                     .frame(width: 435.469, height: 435)
-                    .scaleEffect(x: -1, y: 1) // matches the layer's authored rotation in Figma
+                    .scaleEffect(x: -1, y: 1)
                     .offset(x: 105, y: -61)
 
                 Image("HomeGridBottom")
@@ -42,7 +26,7 @@ struct HomeView: View {
                     .frame(width: 435.469, height: 435)
                     .offset(x: -136, y: 504)
 
-                Image("HomeCardShape")
+                Image("CardShape")
                     .resizable()
                     .frame(width: 344, height: 439.018)
                     .offset(x: 29, y: 217)
@@ -58,22 +42,29 @@ struct HomeView: View {
     private var content: some View {
         VStack(spacing: 20) {
             VStack(spacing: 8) {
-                Text("SCI.\nMULATE")
+                Text("CORALIZE")
                     .font(.custom("JetBrainsMono-Bold", size: 52.788))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(DesignTokens.blackText)
+                    // Wider than `content`'s 239.304pt frame (sized for the subtitle/button, not
+                    // this headline) — without this "CORALIZE" wraps after the "z".
+                    .fixedSize()
                 Text("Welcome, scientists!\nGet your cards ready.")
                     .font(.custom("JetBrainsMono-Regular", size: 18))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(DesignTokens.blackText)
             }
-            Button("Scan a Card", action: action)
-                .font(.custom("InterVariable", size: 18))
-                .foregroundStyle(DesignTokens.whiteText)
-                .padding(.horizontal, 20)
-                .frame(height: 44)
-                .background(Capsule().fill(DesignTokens.secondaryBlue))
-                .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
+            Button(action: action) {
+                Text("Scan a Card")
+                    .font(.custom("InterVariable", size: 18))
+                    .foregroundStyle(DesignTokens.whiteText)
+                    .padding(.horizontal, 20)
+                    .frame(height: 44)
+                    .background(Capsule().fill(DesignTokens.secondaryBlue))
+                    .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(PressableButtonStyle())
         }
     }
 }

@@ -107,6 +107,12 @@ final class ARStatus {
     /// failure to lock can be told apart from a failure to see the hand.
     var handInFrame = false
 
+    /// Whether a showcase card carrying `ANNO*` labels is on screen right now — the signal
+    /// `ContentView` uses to show "TAP TO VIEW INFORMATION". Showcase-only and annotation-only:
+    /// a plain showcase card has nothing to tap, and a simulation card already has its own hint
+    /// bar for its gesture. See `Coordinator.onRenderFrame()`.
+    var annotatedShowcaseVisible = false
+
     /// Whether a hand is in frame that Vision cannot read a pinch from — see
     /// `PinchInteraction.handTooClose`. Drawn during `playing` only, by `ContentView`.
     var handTooClose = false
@@ -252,6 +258,12 @@ extension PostcardARView {
             /// on re-detection instead of read back off `pivot`, and left untouched on tracking
             /// loss so the next pose glides in like any other movement, rather than snapping.
             var heldPose: Transform?
+
+            /// Whether this card's model got any labels built by `AnnotationLayer.collect(from:
+            /// in:named:report:)` — set once in `attachModels()`. Read in `onRenderFrame()` to
+            /// decide `ARStatus.annotatedShowcaseVisible`, so a showcase card worth tapping can
+            /// tell the player so.
+            var hasAnnotations = false
         }
 
         private let status: ARStatus
@@ -476,6 +488,7 @@ extension PostcardARView {
             // is under way — and whether the card the current run belongs to is on screen at all.
             var trackedSimulation: String?
             var activeCardPresent = false
+            var annotatedShowcaseVisible = false
 
             // Where, and what — asked separately, which is the whole point of the split. ARKit
             // says an anchor is on camera; the QR says which model is printed on it. `detected`
@@ -527,6 +540,32 @@ extension PostcardARView {
                 let named = pinch.qrPayload == cards[index].name
                 let visible = (tracked && named)
                     || (cards[index].pivot.isEnabled && (tracked || (handInFrame && isSimulation)))
+                // Showcase-only: a showcase card is only ever on screen while tracked (it has no
+                // occlusion lock, see `visible` below), so `tracked` alone is "on screen" for it.
+                if tracked, !isSimulation, cards[index].hasAnnotations {
+                    annotatedShowcaseVisible = true
+                }
+
+                // `pivot.isEnabled` is the lock itself. Only a tracked frame can turn it on, so a
+                // card that has never been seen stays dark no matter what the hand does — which
+                // is what keeps every other card's model out of the frame, since all of them load
+                // at launch and an unposed pivot sits at the world origin. Once on, it stays on
+                // while the card is tracked *or* a hand is in frame, and goes off the moment
+                // both are gone.
+                //
+                // Simulation cards only. The lock exists so that reaching into the scene does not
+                // delete the thing you are reaching for; a showcase card has nothing to reach for,
+                // so it hides the moment its card leaves and never lingers under a passing hand.
+                //
+                // `.instructions` gets an exemption from the hand requirement, for this card only:
+                // nothing hand-related happens on that screen — the player is just reading, not
+                // reaching — so `handInFrame` is almost never true there, and without this the
+                // lock never engages, leaving GameSession's own `.instructions` case exposed to
+                // every single tracking dropout with nothing softening it. Scoped to
+                // `activeSimulationCard` so a second, unrelated simulation card in frame doesn't
+                // also get held up by this.
+                let instructionsExempt = game.phase == .instructions && cards[index].name == activeSimulationCard
+                let visible = tracked || (cards[index].pivot.isEnabled && (handInFrame || instructionsExempt) && isSimulation)
                 if cards[index].pivot.isEnabled != visible {
                     cards[index].pivot.isEnabled = visible
                 }
@@ -558,6 +597,9 @@ extension PostcardARView {
             }
             if status.handInFrame != handInFrame {
                 status.handInFrame = handInFrame
+            }
+            if status.annotatedShowcaseVisible != annotatedShowcaseVisible {
+                status.annotatedShowcaseVisible = annotatedShowcaseVisible
             }
             let handTooClose = pinch.handTooClose
             if status.handTooClose != handTooClose {
@@ -736,6 +778,32 @@ extension PostcardARView {
                     }
                     play(in: model)
                     card.model = model
+        /// and the scaling, so all that happens here is a clone per card. A card whose `.usdz`
+        /// failed to load has no model and is simply skipped — the reason is already in
+        /// `library.errors`, reported by `start(in:)`.
+        private func attachModels() {
+            for index in cards.indices {
+                let card = cards[index]
+                guard let model = library.model(named: card.name) else { continue }
+                card.pivot.addChild(model)
+                // Any card's model may carry `ANNO*` entities; nothing about this turns on the
+                // card's kind, so both kinds are offered to it. The pivot rather than the model is
+                // handed over as the container — see `AnnotationLayer.collect(from:in:named:report:)`.
+                cards[index].hasAnnotations =
+                    annotations.collect(from: model, in: card.pivot, named: card.name, report: report)
+                // Showcase models are looked at, not touched, so nothing in one ever enters the
+                // grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to find on one.
+                // Which minigame a simulation card runs is read from the model's own contents, not
+                // from its name; see `Minigame.swift`.
+                if card.kind == .simulation {
+                    pinch.collect(from: model, named: card.name, report: report)
+                }
+                card.pivot.addChild(mask(for: card))
+                // A sibling of the model, never a child of it: `fit(_:named:)` has already sized the
+                // model against its own bounds, and burying the floor inside it would make every
+                // later measurement of that tree wrong. `nil` for a model that ships its own ground.
+                if let seafloor = library.seafloor(under: model, sizedTo: card.size, report: report) {
+                    card.pivot.addChild(seafloor)
                 }
             }
             guard let model = card.model else { return }

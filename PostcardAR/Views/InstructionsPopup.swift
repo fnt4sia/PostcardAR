@@ -28,24 +28,30 @@ struct InstructionsPopup: View {
     }
 
     private var content: some View {
-        VStack(spacing: 24) {
-            VStack(spacing: 18) {
+        VStack(spacing: 15) {
+            VStack(spacing: 15) {
                 Text(title)
                     .font(.custom("JetBrainsMono-Bold", size: 34))
                     .multilineTextAlignment(.center)
+                    .foregroundStyle(DesignTokens.whiteText)
                 Text(message)
                     .font(.custom("InterVariable", size: 18))
                     .multilineTextAlignment(.center)
+                    .foregroundStyle(DesignTokens.blueText)
             }
-            .foregroundStyle(DesignTokens.whiteText)
+            
 
-            Button(buttonTitle, action: action)
-                .font(.custom("InterVariable", size: 18))
-                .foregroundStyle(DesignTokens.whiteText)
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
-                .background(Capsule().fill(DesignTokens.secondaryBlue))
-                .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
+            Button(action: action) {
+                Text(buttonTitle)
+                    .font(.custom("InterVariable", size: 18))
+                    .foregroundStyle(DesignTokens.whiteText)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(Capsule().fill(DesignTokens.secondaryBlue))
+                    .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(PressableButtonStyle())
         }
     }
 }
@@ -57,7 +63,7 @@ struct InstructionsPopup: View {
             title: "THE SILENT KILLER",
             message: """
                 Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off.
-                Clear as many as you can in 30 seconds.
+                
                 """
         )
     }

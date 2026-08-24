@@ -1,7 +1,7 @@
 {
   "images" : [
     {
-      "filename" : "HomeCardShape.svg",
+      "filename" : "borderSimDrupella.png",
       "idiom" : "universal"
     }
   ],
@@ -10,6 +10,7 @@
     "version" : 1
   },
   "properties" : {
-    "preserves-vector-representation" : true
+    "unit" : "inches",
+    "width" : 6
   }
 }
