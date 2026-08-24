@@ -15,10 +15,12 @@ one.
    is a *showcase* card that only stands its model up to be looked at. See `docs/simulation.md`.
 6. **Which minigame is decided by the model's contents, not its name** — `CoralPlantPoint*` inside
    it means the planting game, `Drupella*` the removal game. See `docs/simulation.md`.
-7. One gesture exists, on simulation cards only: pinch to pick up a grabbable entity and drag it —
-   see `docs/interaction.md`. Nothing else on the model responds to touch.
-8. A model of either kind may carry `Annotation*` entities, which draw explanation labels from a
-   `.json` file of the same name as the card. See `docs/annotations.md`.
+7. Two gestures, and they never overlap. **Pinch**, on simulation cards only, picks up a grabbable
+   entity and drags it — read from the camera by Vision, never from the screen; see
+   `docs/interaction.md`. **Tap**, on the screen, opens or closes an annotation panel and does
+   nothing else at all. Neither moves, selects or otherwise disturbs a model.
+8. A model of either kind may carry `ANNO*` entities, which build explanation labels — billboarded
+   panels in the scene — from a `.json` file of the same name as the card. See `docs/annotations.md`.
 
 Adding a card is two files — an image in the resource group and a `.usdz` of the same name — and no
 code change; a third, `<name>.json`, if it has annotations. Nothing in the source names an
@@ -29,11 +31,12 @@ individual card.
 | Name | Means |
 |---|---|
 | `Simulation*` (card) | runs a minigame; anything else is a showcase card |
-| `Annotation*` | a point to hang an explanation label on |
+| `ANNO*` | a point to hang an explanation label on; its panel is built into the scene on a ring around the model, closed until its dot is tapped |
 | `Drupella*` | a grabbable snail; `*_Outline` is its outline mesh |
 | `CoralPlantPoint*` | a slot a coral can be planted into — and the marker that a model *is* the planting game |
 | `CoralPlate*` | optional; the visible socket for the point of the same number, pulsed while that slot is free |
 | `SingleCoral*` | a coral that can be picked up and planted |
+| `Seafloor*` (in a model) | this model brings its own ground, so the shared `Seafloor.usdz` is not laid under it |
 
 ## Stack
 
@@ -67,13 +70,14 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 | `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan. Owns `fit`, `removeCameras`, `modelWidths` |
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
 | `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — the grabbable pool, both minigames' grab/release rules, hand-pose sampling, haptics |
-| `PostcardAR/Annotations.swift` | Explanation labels: finding `Annotation*` entities, reading their JSON, projecting them to the screen |
+| `PostcardAR/Annotations.swift` | Explanation labels: finding `ANNO*` entities, reading their JSON, and building the billboarded panels into the scene |
 | `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the run, the 3 s grace. Shared by both minigames |
 | `PostcardAR/Minigame.swift` | The two games' settings: run length and every word the player reads. One block per game |
 | `PostcardAR/Views/` | The Figma-traced screens — home, loading, instructions, countdown, HUD, result — and `DesignTokens` |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
 | `PostcardAR/<image name>.json` | Annotation text for that card, if it has any — see `docs/annotations.md` |
+| `PostcardAR/Seafloor.usdz` | Not a card. The shared ground plane laid under every model that does not bring its own — see `docs/models.md` |
 | `README.md` | What the project is, how to run it, how to add a card |
 | `docs/` | Design notes, one file per area |
 
@@ -88,7 +92,7 @@ Documentation is split by area, and each file owns its topic:
 | `docs/app-shell.md` | SwiftUI, the `UIViewRepresentable` bridge, the status panel |
 | `docs/interaction.md` | Pinch pickup: Vision hand-pose sampling, grab/drag/release, tuning |
 | `docs/simulation.md` | Card kinds, which minigame a model is, both games' rules, the run's phases and clocks, scoring |
-| `docs/annotations.md` | Explanation labels: the `Annotation*`/JSON pairing, and why they are drawn in screen space |
+| `docs/annotations.md` | Explanation labels: the `ANNO*`/JSON pairing, the ring layout, and why a panel is a texture rather than a SwiftUI view |
 | `docs/troubleshooting.md` | Symptom → cause, starting from the status panel |
 
 The Xcode target uses a synchronized folder group, so any file added under `PostcardAR/`
@@ -105,7 +109,12 @@ until ARKit tracks its image, so cards that are not on camera cost nothing.
 ```
 worldRoot (static)     <- AnchorEntity(world: .zero), added once, never written to
   └── pivot            <- smoothed world pose, and the `isEnabled` that drives visibility/lock
-        └── model      <- <image name>.usdz, animations play here
+        ├── mask       <- generated quad at the card's own printed size, hiding the artwork
+        ├── seafloor   <- shared Seafloor.usdz, sized to the *card*, top surface just above y=0
+        └── model      <- <image name>.usdz, sized by `fit` to `modelWidths`, base at y=0
+
+        All three are siblings, so they are rigidly attached to each other and to the card. The
+        floor is never a child of the model: `fit` measures the model's own bounds.
 
 AnchorEntity(.image)   <- ARKit rewrites this transform every frame. Never modify it, never
                           parent anything visible under it — see "Visibility" below.
@@ -345,7 +354,8 @@ in `docs/simulation.md`.
 
 ## Pinch pickup
 
-The one gesture, on simulation cards only: pinch to grab a piece and drag it. Runs on
+The gesture that drives the minigames, on simulation cards only: pinch to grab a piece and drag
+it. Touch is not involved — the only tap in the app opens an annotation. Runs on
 Vision (`DetectHumanHandPoseRequest`), read from the same `capturedImage` ARKit is already
 tracking cards against, sampled at 15 Hz — independent of and slower than the 60 fps render loop,
 and guarded against overlapping inference. Grab is gated on `phase == .playing` and is then
@@ -408,6 +418,30 @@ Nothing is repositioned at load time — a `SingleCoral*` stays exactly where th
 a `Drupella*` — so `fit` measures the whole model with no special case, and the arrangement being
 sized is the arrangement that ends up on screen.
 
+**The card mask and the shared seafloor are sized from the card instead**, and deliberately so:
+covering the printed artwork is their whole job, so `ARReferenceImage.physicalSize` is the only
+correct input for both.
+
+The seafloor takes a uniform **`min`** of the two axis ratios — a *contain* fit, so the floor never
+spills past the card's edge; the asset is authored to the card's proportions, so it lands 0.26 mm
+short on width and exact on depth. Only `Seafloor_Sand*` is measured, since the pebbles scatter past
+the sand's edge. **Its `y` is what stops models looking like they fly:** `fit` stands models base-at
+y = 0, and `seafloorEmbed` puts the sand's *top* just **above** that plane, so a model is sunk into
+the sand rather than balanced on its highest grain. Positive, and roughly the sand's own 4.6 mm of
+undulation. The earlier version pushed the floor 3 mm *down* and that is exactly why models hovered.
+A model much wider than the card cannot look attached to a card-sized floor, so `modelWidths` has to
+stay under about 0.14 for any card using it.
+`Coordinator.mask(for:)` generates a quad at that size — plus `cardMaskBleed`, since a reference
+image is rarely cropped to the exact millimetre of the print and an exact-size mask leaves a sliver
+of card edge showing. It uses `generatePlane(width:depth:)`, **not** `(width:height:)`: the first
+builds the plane in XZ, which is the card's own plane, so the mask needs no rotation.
+
+Its colour and material are **sampled from `Showcase_Biorock.usdz`'s `Seafloor_SandMat`**, not
+chosen: `#A99F8B` averaged over that bake's non-padding pixels, at its own roughness 0.95 and
+metallic 0, so the mask reads as ground and agrees with the models' own sand under room light. It
+is lit rather than unlit for exactly that reason — an unlit quad renders at its authored value and
+drifts away from the lit geometry beside it. Full account in `docs/models.md`.
+
 ## Imported models carry a whole scene
 
 A `.usdz` from Blender contains the lighting rig and the viewport camera, not just the mesh.
@@ -415,7 +449,18 @@ RealityKit turns a USD `Camera` prim into a real `PerspectiveCamera` entity, and
 an `ARView` scene hands rendering to it — **the passthrough camera freezes**, with no error and
 nothing in the log. `ModelLibrary.removeCameras(from:)` strips them at load time; do not remove that call.
 
-Imported lights come in as inert entities and are left alone.
+Imported lights come in as inert entities and are left alone — **a Blender light in a `.usdz`
+lights nothing here, and no setting changes that.** `ARView(cameraMode: .ar)` lights the scene from
+ARKit's environment probe, i.e. the real room, which is what makes a model look like it is on the
+table. Bake lighting into textures (as `BakedBaseColor`/`BakedCoral_*`/`Bake_Sand` already do), or
+add a real `DirectionalLightComponent`/`PointLightComponent`/`SpotLightComponent` in code.
+
+**Nothing auto-plays either.** RealityKit imports animation into `Entity.availableAnimations` and
+leaves it *stopped*. `Coordinator.play(in:)` starts every clip looping at load, walking the whole
+tree — RealityKit hangs the animation library on whichever entity the clip targets, not necessarily
+the root. Before blaming that code, check the animation survived export at all:
+`usdcat --flatten *.usdc | grep -c timeSamples` returns `0` for every `.usdz` in this project today,
+so there is currently nothing for it to play. See `docs/models.md`.
 
 Diagnose an imported asset by walking the loaded entity tree and printing components, rather
 than by reading the file size — the shipped coral is 9 MB and froze the camera, while a 52 MB

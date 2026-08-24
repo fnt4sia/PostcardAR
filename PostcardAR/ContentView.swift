@@ -51,8 +51,8 @@ private struct ScannerScreen: View {
     var body: some View {
         PostcardARView(status: status, game: game, annotations: annotations, library: library)
             .ignoresSafeArea()
-            .overlay(alignment: .topLeading) { annotationLayer }
-
+            // No annotation overlay: the labels are entities in the scene now, drawn by RealityKit
+            // rather than by SwiftUI. See `Annotations.swift`.
             .overlay(alignment: .topLeading) {
                 Button {
                     dismiss()
@@ -65,29 +65,6 @@ private struct ScannerScreen: View {
                 .padding()
             }
             .overlay { runOverlay }
-    }
-
-    // MARK: Annotations
-
-    /// The explanation labels, each at the screen point its `Annotation*` entity projects to.
-    ///
-    /// Aligned `.topLeading` because `.position(_:)` is measured from its container's origin, and
-    /// that container has to be the same rectangle `arView.project(_:)` reported into — which it is,
-    /// since `PostcardARView` fills the screen and ignores the safe area.
-    ///
-    /// Card and dot are positioned separately: `.position(_:)` centres a view, so anchoring the
-    /// bottom of a card-plus-stem stack on the point would need a height that depends on how far
-    /// the body text wraps. See `AnnotationBox`.
-    private var annotationLayer: some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(annotations.placed) { placed in
-                AnnotationDot()
-                    .position(placed.point)
-                AnnotationBox(title: placed.title, detail: placed.detail)
-                    .position(x: placed.point.x, y: placed.point.y - AnnotationBox.offset)
-            }
-        }
-        .allowsHitTesting(false) // labels are read, not tapped — never swallow the Close button
     }
 
     // MARK: The run

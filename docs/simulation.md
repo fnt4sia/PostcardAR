@@ -41,7 +41,7 @@ mid-air after the card has gone.
 Showcase models never enter `grabbables`, which is the whole implementation of "no pinch on a
 showcase card" — `attemptGrab(at:)` has nothing to find on one, with no extra test.
 
-Annotations are **not** on that list, and deliberately so: a model carrying `Annotation*` entities
+Annotations are **not** on that list, and deliberately so: a model carrying `ANNO*` entities
 gets labels whatever kind of card it is on. See [annotations.md](annotations.md).
 
 ## Which minigame — read from the model, not the name

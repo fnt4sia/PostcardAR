@@ -39,15 +39,53 @@ let arResourceGroupName = "AR Resources"
 /// model size: `fit(_:named:)` measures the model at load time and makes its authored scale
 /// irrelevant, so only these numbers matter. Keyed by card name; a card missing here falls back
 /// to `defaultModelWidth`.
+/// Keys are matched exactly, case included — a card renamed in the asset catalog and not renamed
+/// here silently falls back to `defaultModelWidth`.
 private let modelWidths: [String: Float] = [
-    "Showcase_drupella": 0.08,
-    "Simulation_drupella": 0.55,
-    "Showcase_coral": 0.3,
-    "Simulation_coral": 0.4,
+    "Showcase_Biorock": 0.3,
+    // Brought down from 0.3 when the shared seafloor came back. The floor is the card's own size —
+    // 15.2 cm on a 6-inch card — so a model 30 cm wide overhung it by a factor of two and could not
+    // read as standing *on* anything. Anything up to about 0.14 stays within its floor. A card whose
+    // model ships its own ground (`Showcase_Biorock`) is not constrained this way.
+    "Showcase_Coral": 0.13,
+    "Showcase_Drupella": 0.08,
+    "Simulation_Coral": 0.4,
+    "Simulation_Drupella": 0.55,
 ]
 
 /// Width a card without an entry in `modelWidths` is sized to.
 private let defaultModelWidth: Float = 0.2
+
+/// The shared ground plane laid under every card's model, from `Seafloor.usdz` in the bundle.
+///
+/// Deliberately not a card of its own: it has no reference image, is never in `models`, and is
+/// loaded once and cloned per card by `seafloor(under:sizedTo:report:)`.
+private let seafloorModelName = "Seafloor"
+
+/// Ground geometry a card's *own* model already ships, named by the same idiom every other piece of
+/// the content API uses. A model containing one of these gets no shared seafloor under it —
+/// `Showcase_Biorock.usdz` has 115 `Seafloor_*` prims of its own, and stacking a second floor on
+/// them only z-fights.
+private let seafloorPrefix = "Seafloor"
+
+/// The part of `Seafloor.usdz` that has to line up with the card.
+///
+/// A **prefix**, not an exact name, because the asset has been re-authored once already and renamed
+/// this from `Seafloor_Sand` to `Seafloor_Sand_m` on the way. Measuring it rather than the whole
+/// model matters: the pebbles and weeds scatter past the sand's edge, so sizing by the full
+/// `visualBounds` would leave the sand itself smaller than the card.
+private let seafloorSurfacePrefix = "Seafloor_Sand"
+
+/// How far the **top of the sand** sits *above* the card plane, in metres — so the models, which
+/// `fit(_:named:)` stands with their base at y = 0, are planted a little into the floor rather than
+/// resting on its highest grain.
+///
+/// This is the number that fixes "the model looks like it is flying". It has to be positive. The
+/// sand is a sculpted surface, not a flat one — about 4.6 mm of undulation once scaled to a 6-inch
+/// card — so a model whose base sits exactly at the sand's *bounding-box top* touches only the
+/// highest dune and visibly hovers over everything lower. Sinking it by roughly that undulation
+/// puts the base near the average surface, and the contact reads as solid from every angle.
+private let seafloorEmbed: Float = 0.004
 
 /// The reference images and the prepared models, loaded once and reused by every scan.
 @MainActor
@@ -73,6 +111,11 @@ final class ModelLibrary {
     /// `model(named:)` hands out clones of these; see there for why.
     @ObservationIgnored private var models: [String: Entity] = [:]
 
+    /// The pristine shared ground plane, camera-stripped but **not** scaled — it is sized per card
+    /// by `seafloor(under:sizedTo:report:)`, since each card can be printed at a different size.
+    /// `nil` if `Seafloor.usdz` is missing, which is not an error: models simply stand on the card.
+    @ObservationIgnored private var seafloorModel: Entity?
+
     /// Guards against a second `load()` overlapping the first — the button can be pressed again
     /// while the loading screen is up.
     @ObservationIgnored private var isLoading = false
@@ -91,6 +134,19 @@ final class ModelLibrary {
             errors.append("No reference images in the \"\(arResourceGroupName)\" group.")
             isReady = true // nothing to wait for; the camera screen reports the problem
             return
+        }
+
+        // Before the cards, because every one of them may want a clone of it. Not counted in
+        // `loaded`/`total`, which count *cards*; a missing `Seafloor.usdz` is silent, since a
+        // project that does not ship one simply stands its models on the card itself.
+        if Bundle.main.url(forResource: seafloorModelName, withExtension: "usdz") != nil {
+            do {
+                let floor = try await Entity(named: seafloorModelName)
+                Self.removeCameras(from: floor)
+                seafloorModel = floor
+            } catch {
+                errors.append("Could not load \(seafloorModelName).usdz: \(error.localizedDescription)")
+            }
         }
 
         // One at a time rather than all at once: decoding and texture upload happen on the main
@@ -126,6 +182,77 @@ final class ModelLibrary {
     /// again. What it copies is the entity tree and its components.
     func model(named name: String) -> Entity? {
         models[name]?.clone(recursive: true)
+    }
+
+    /// A ground plane sized to one card, to be added to that card's **pivot as a sibling of the
+    /// model** — never as a child of it, or `fit(_:named:)`'s measurement of the model would include
+    /// the floor and every card's model would come out the wrong size.
+    ///
+    /// `nil` when there is no `Seafloor.usdz`, or when `model` already ships ground of its own.
+    ///
+    /// **Sized to the card, not to `modelWidths`.** The opposite of the rule for models, and
+    /// deliberately: a model's size is an artistic choice that must stay free of the card's printed
+    /// size, whereas matching the card *is* this thing's whole job.
+    ///
+    /// **`min`, not `max` — a "contain" fit.** The floor is never allowed to spill past the card.
+    /// That costs nothing here because the asset is authored to the card's proportions: the sand
+    /// measures 9.747 × 12.682 (0.7686) against a 5855 × 7605 card (0.7699), so a uniform scale
+    /// lands within about 0.2% on both axes and the "gap" is a few tenths of a millimetre — which
+    /// the card mask underneath covers anyway. Should a future card have a different aspect ratio,
+    /// `min` keeps the floor inside its edges rather than hanging over the table.
+    ///
+    /// **The y placement is what stops models looking like they are flying.** See `seafloorEmbed`.
+    func seafloor(under model: Entity, sizedTo cardSize: CGSize,
+                  report: (String) -> Void) -> Entity? {
+        guard let seafloorModel, !Self.contains(prefix: seafloorPrefix, in: model) else { return nil }
+
+        let floor = seafloorModel.clone(recursive: true)
+        // Bounds in the clone's *own* space, which is the space `scale` and `position` below are
+        // applied in — so the two are measured and written in the same frame of reference.
+        let surface = Self.find(prefix: seafloorSurfacePrefix, in: floor) ?? floor
+        let bounds = surface.visualBounds(relativeTo: floor)
+
+        guard bounds.extents.x > 0, bounds.extents.z > 0,
+              cardSize.width > 0, cardSize.height > 0
+        else {
+            report("""
+                Could not size \(seafloorModelName): card measures \(cardSize.width) × \
+                \(cardSize.height) m, floor measures \(bounds.extents.x) × \(bounds.extents.z) m.
+                """)
+            return nil
+        }
+
+        // The anchor's axes follow the card: x across its printed width, z down its printed height,
+        // y out of its surface — so `physicalSize.height` is a depth here, not a height.
+        let scale = min(Float(cardSize.width) / bounds.extents.x,
+                        Float(cardSize.height) / bounds.extents.z)
+        floor.scale = .init(repeating: scale)
+
+        // Centred on the card in x and z, same solve as `fit(_:named:)`. In y it is the *top* of the
+        // sand that gets placed, not its bottom: the models stand with their base at y = 0, so where
+        // the surface they stand on lands is the only thing that matters, and `seafloorEmbed` lifts
+        // it just above that plane so they sit in the sand rather than on top of it.
+        floor.position = [
+            -bounds.center.x * scale,
+            seafloorEmbed - (bounds.center.y + bounds.extents.y / 2) * scale,
+            -bounds.center.z * scale
+        ]
+        return floor
+    }
+
+    /// Whether anything in `entity`'s tree is named with `prefix`. Same walk as
+    /// `PinchInteraction.find(prefix:in:)`, stopping at the first hit.
+    private static func contains(prefix: String, in entity: Entity) -> Bool {
+        entity.name.hasPrefix(prefix) || entity.children.contains { contains(prefix: prefix, in: $0) }
+    }
+
+    /// The first entity in `entity`'s tree whose name starts with `prefix`.
+    private static func find(prefix: String, in entity: Entity) -> Entity? {
+        if entity.name.hasPrefix(prefix) { return entity }
+        for child in entity.children {
+            if let found = find(prefix: prefix, in: child) { return found }
+        }
+        return nil
     }
 
     /// Decodes the asset catalog's reference images off the main thread.

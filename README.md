@@ -77,14 +77,22 @@ case-sensitive, and anything unmatched is scenery:
 
 | Name it | To get |
 |---|---|
-| `Annotation*` | An explanation label pinned to that point, with text from `<card name>.json`. Works on any card — see [docs/annotations.md](docs/annotations.md). |
+| `ANNO*` | An explanation label pinned to that point, with text from `<card name>.json`. A dot appears on the model; tap it and a panel opens in the scene, on a ring around the model, with a line back to the point. Works on any card — see [docs/annotations.md](docs/annotations.md). |
 | `Drupella*` | A snail to pinch off. A model with these runs the **removal** minigame. |
 | `CoralPlantPoint*` | A slot to plant a coral into. A model with these runs the **planting** minigame. Keep its rotation unbaked and planted corals adopt it. |
 | `CoralPlate*` | Optional. The visible socket for the point of the same number — `CoralPlate_03` goes with `CoralPlantPoint_03`. The app pulses it while that slot is free. |
 | `SingleCoral*` | A coral to pick up and plant. Stays exactly where you put it in the model. |
+| `Seafloor*` | Opts the card *out* of the shared ground plane, because this model brings its own. |
 
 Which minigame a simulation card runs is read from these, not from the card's name: plant points win
 if both are present. So there is one naming rule to keep in step (image ↔ `.usdz`), not two.
+
+
+The printed card itself is covered over as soon as it is tracked, so design the model to be the
+whole of what the player sees — the artwork is a target, not a backdrop. Every card also gets
+`Seafloor.usdz` laid under its model at the card's own size, with the model planted into it; keep
+that card's `modelWidths` entry under about 0.14 so the model fits on its floor. See
+[docs/models.md](docs/models.md).
 
 ### What usually goes wrong
 
@@ -96,7 +104,7 @@ if both are present. So there is one naming rule to keep in step (image ↔ `.us
 | Everything stutters | Model weight. Budget 512² textures and under ~50k triangles, *shared* across all cards — every model loads at launch and stays resident. |
 | A card with no `.usdz` | Tracks fine, shows nothing, and the status panel names the missing file. |
 | No minigame on a card | Either it is a showcase card — only a name starting `Simulation` runs one, and the `.usdz` needs the same prefix — or the model has no `Drupella*` or `CoralPlantPoint*` entities in it, which the status panel says outright. |
-| Annotations do not appear | The entity name in the `.usdz` and the `"entity"` in the `.json` have to match exactly. Every mismatch is named in the status panel — see [docs/annotations.md](docs/annotations.md). |
+| Annotations do not appear | Panels start closed — tap the dot on the model to open one. If there is no dot either, the entity name in the `.usdz` and the `"entity"` in the `.json` have to match exactly; every mismatch is named in the status panel — see [docs/annotations.md](docs/annotations.md). |
 | A coral will not snap onto a plant point | Carry it at least `plantArmDistance` from where you grabbed it, then bring it within `plantSnapRadius` (80 screen points) of a free point on its own structure. |
 | Nothing shows where corals should go | Add a `CoralPlate_NN` to your model beside each `CoralPlantPoint_NN`. The app pulses it while the slot is free and holds it solid when a held coral is about to land there; it draws nothing itself. |
 | The run restarted from zero | The card left frame with no hand in it for more than 3 seconds. Inside 3 seconds the score and clock are held; keeping a hand in frame holds the model indefinitely. |
@@ -151,7 +159,7 @@ The camera permission string lives in the build settings as
 | [docs/app-shell.md](docs/app-shell.md) | SwiftUI from scratch: views, state, the UIKit bridge, the status panel |
 | [docs/interaction.md](docs/interaction.md) | Pinch pickup: Vision hand-pose sampling, grab/drag/release |
 | [docs/simulation.md](docs/simulation.md) | Showcase vs Simulation cards, which minigame a model is, both games' rules, the run's phases and clocks |
-| [docs/annotations.md](docs/annotations.md) | Explanation labels: the `Annotation*`/JSON pairing, and why they are drawn in screen space |
+| [docs/annotations.md](docs/annotations.md) | Explanation labels: the `ANNO*`/JSON pairing, the ring layout, and why a panel is a texture rather than a SwiftUI view |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom → cause, starting from the status panel |
 
 `CLAUDE.md` is the working agreement for AI-assisted changes to this repo — the invariants that

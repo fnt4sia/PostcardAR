@@ -1,6 +1,7 @@
 # Pinch pickup
 
-The one gesture in the app: pinch to grab a `Drupella*` entity in a loaded model, drag it, let
+The gesture that drives both minigames — and the only one read from the camera rather than the
+screen: pinch to grab a `Drupella*` entity in a loaded model, drag it, let
 go. Everything here lives in `PinchInteraction.swift` — one `PinchInteraction` type that
 `PostcardARView.swift`'s `Coordinator` owns and drives; see that file's header for the exact call
 surface between the two.
@@ -364,7 +365,7 @@ private func find(prefix: String, in entity: Entity) -> [Entity] {
 ```
 
 One walk, reused for all four prefixes — `Drupella`, `CoralPlantPoint`, `SingleCoral`, and
-`Annotation` has its own copy in `Annotations.swift`.
+`ANNO` has its own copy in `Annotations.swift`.
 
 `collect(from:named:report:)` runs it first for `CoralPlantPoint` and, finding none, for `Drupella`,
 which is how a model declares which minigame it is — see [simulation.md](simulation.md).
