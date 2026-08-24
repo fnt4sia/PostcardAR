@@ -187,8 +187,13 @@ final class AnnotationLayer {
     /// Both halves are reported when they disagree, because that is the mistake this design invites:
     /// the entity name in Blender and the entity name in the JSON file have to match exactly, and
     /// nothing but a message on screen will tell you they do not.
+    /// - Returns: whether this card actually got any labels built — `false` for the ordinary case
+    ///   of a card with no `ANNO*`/no JSON, distinct from the mistake cases which still return
+    ///   `false` but go through `report`. Lets the coordinator know, without re-deriving it, which
+    ///   cards are worth telling the player to tap — see `ARStatus.annotatedShowcaseVisible`.
+    @discardableResult
     func collect(from model: Entity, in container: Entity, named name: String,
-                 report: (String) -> Void) {
+                 report: (String) -> Void) -> Bool {
         let entities = find(prefix: annotationPrefix, in: model)
         let texts = loadTexts(named: name, report: report)
 
@@ -201,7 +206,7 @@ final class AnnotationLayer {
                     \(name).json to label them with.
                     """)
             }
-            return
+            return false
         }
 
         var byName = Dictionary(entities.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
@@ -223,6 +228,7 @@ final class AnnotationLayer {
         }
 
         build(matched, from: model, in: container, named: name, report: report)
+        return !matched.isEmpty
     }
 
     /// Lays the panels out on a ring around the model and builds the entities.

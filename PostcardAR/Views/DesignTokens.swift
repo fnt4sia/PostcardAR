@@ -9,6 +9,7 @@ import CoreText
 enum DesignTokens {
     static let whiteText = Color("WhiteText")
     static let blackText = Color("BlackText")
+    static let blueText = Color("BlueText")
     static let secondaryBlue = Color("SecondaryBlue")
     static let primaryBlue = Color("PrimaryBlue")
     static let buttonBorder = Color(hex: 0xB7FBFF)
@@ -34,5 +35,13 @@ extension Color {
             green: Double((hex >> 8) & 0xFF) / 255,
             blue: Double(hex & 0xFF) / 255
         )
+    }
+}
+
+struct PressableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
     }
 }

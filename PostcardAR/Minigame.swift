@@ -54,6 +54,9 @@ enum Minigame {
 
         /// Headline under the score on the result panel.
         let resultTitle: String
+
+        /// The hint bar shown over the HUD during `.playing`, naming this game's gesture.
+        let hint: String
     }
 
     var settings: Settings {
@@ -64,10 +67,10 @@ enum Minigame {
                 title: "THE SILENT KILLER",
                 instructions: """
                     Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off.
-                    Clear as many as you can in 30 seconds.
                     """,
                 resultLabel: "CLEARED",
-                resultTitle: "DRUPELLA REMOVED"
+                resultTitle: "DRUPELLA REMOVED",
+                hint: "PINCH & HOLD TO REMOVE"
             )
 
         case .plantingCoral:
@@ -76,10 +79,10 @@ enum Minigame {
                 title: "REBUILD THE REEF",
                 instructions: """
                     The biorock frame is bare. Pinch a coral with your thumb and finger and carry it onto a glowing plate.
-                    Plant as many as you can in 45 seconds.
                     """,
                 resultLabel: "PLANTED",
-                resultTitle: "CORAL PLANTED"
+                resultTitle: "CORAL PLANTED",
+                hint: "PINCH & DRAG TO PLANT"
             )
         }
     }

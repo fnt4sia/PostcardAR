@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @State private var isScanning = false
@@ -16,20 +17,34 @@ struct ContentView: View {
     @State private var library = ModelLibrary()
 
     var body: some View {
-        HomeView(action: {
-            isScanning = true
-            // Returns immediately once the library is loaded, which is why only the first scan of
-            // a launch ever sees `LoadingView`.
-            Task { await library.load() }
-        })
-        .fullScreenCover(isPresented: $isScanning) {
-            if library.isReady {
-                ScannerScreen(library: library)
-                    .onDisappear { isScanning = false }
-            } else {
-                LoadingView(loaded: library.loaded, total: library.total)
+        ZStack {
+            HomeView(action: {
+                isScanning = true
+                // Returns immediately once the library is loaded, which is why only the first scan
+                // of a launch ever sees `LoadingView`.
+                Task { await library.load() }
+            })
+
+            // A plain conditional instead of `.fullScreenCover`: a cover's dismissal is a fixed
+            // system slide, not something SwiftUI lets you restyle. Crossfades in; on the way out
+            // it also recedes slightly, the same `.scale.combined(with: .opacity)` the `.finished`
+            // result card itself already uses — so leaving reads as the same kind of motion as
+            // arriving there did, not a mirror-image slide.
+            if isScanning {
+                Group {
+                    if library.isReady {
+                        ScannerScreen(library: library, close: { isScanning = false })
+                    } else {
+                        LoadingView(loaded: library.loaded, total: library.total)
+                    }
+                }
+                .transition(.asymmetric(
+                    insertion: .opacity,
+                    removal: .scale(scale: 0.92).combined(with: .opacity)
+                ))
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: isScanning)
     }
 }
 
@@ -43,7 +58,10 @@ private struct ScannerScreen: View {
     /// Loaded before this screen was built — see `ModelLibrary`.
     let library: ModelLibrary
 
-    @Environment(\.dismiss) private var dismiss
+    /// Replaces `@Environment(\.dismiss)` — that only exists inside a real presentation
+    /// (`.sheet`/`.fullScreenCover`), and this screen is a plain conditional now. See `ContentView`.
+    let close: () -> Void
+
     @State private var status = ARStatus()
     @State private var game = GameSession()
     @State private var annotations = AnnotationLayer()
@@ -54,17 +72,51 @@ private struct ScannerScreen: View {
             // No annotation overlay: the labels are entities in the scene now, drawn by RealityKit
             // rather than by SwiftUI. See `Annotations.swift`.
             .overlay(alignment: .topLeading) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "x.circle.fill")
-                        .font(.system(size: 28))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, .black.opacity(0.5))
+                // Hidden on .countdown too — 3·2·1 shouldn't be interruptible any more than the
+                // result screen is.
+                if game.phase != .finished && game.phase != .countdown {
+                    Button {
+                        close()
+                    } label: {
+                        Image(systemName: "x.circle.fill")
+                            .font(.system(size: 34))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .secondaryBlue.opacity(1))
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .padding()
                 }
-                .padding()
             }
             .overlay { runOverlay }
+            // A showcase card's own hint, for tapping its labels open. Gated on `.idle`: a
+            // simulation card already owns the bottom of the screen the moment a run starts
+            // (its own `PlayingHintBar`, the HUD, the result card), and two cards can be in
+            // frame together — this only speaks while nothing else is.
+            .overlay(alignment: .bottom) {
+                if status.annotatedShowcaseVisible, game.phase == .idle {
+                    PlayingHintBar(text: "TAP TO VIEW INFORMATION")
+                        .padding(.bottom, 37)
+                }
+            }
+            // Phase-keyed haptics, independent of the per-second ones below: a "get ready" tap
+            // right at countdown kickoff (before 3 even shows — the text-keyed haptic only fires
+            // on a *change*, so a countdownText already "3" from its default would otherwise skip
+            // that first beat), and a success tap the instant the result card appears.
+            .onChange(of: game.phase) { _, phase in
+                switch phase {
+                case .countdown: UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                case .finished: UINotificationFeedbackGenerator().notificationOccurred(.success)
+                default: break
+                }
+            }
+            // A light tap on each of 3·2·1, a stronger one on "START!" — same asymmetry as the Camera app's own self-timer.
+            .onChange(of: game.countdownText) { _, text in
+                if text == "START!" {
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                } else {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
+            }
     }
 
     // MARK: The run
@@ -91,35 +143,30 @@ private struct ScannerScreen: View {
 
         case .countdown:
             dimmed {
-                CountdownCard(number: game.countdownNumber)
+                CountdownCard(text: game.countdownText)
             }
 
         case .playing:
             ZStack(alignment: .top) {
                 if status.handTooClose { tooCloseNotice }
-            
+
                 TimerHUD(secondsRemaining: game.secondsRemaining, current: game.score, total: game.target)
                     .padding(.top, 50)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .overlay(alignment: .bottom) {
+                PlayingHintBar(text: game.minigame.settings.hint)
+                    .padding(.bottom, 37)
+            }
             .animation(.easeInOut(duration: 0.2), value: status.handTooClose)
 
         case .grace:
             dimmed {
-                VStack(spacing: 12) {
-                    Image(systemName: "viewfinder")
-                        .font(.system(size: 44))
-                    Text("Point at the card again")
-                        .font(.title3.weight(.semibold))
-                    Text("\(game.graceSecondsRemaining)")
-                        .font(.system(size: 64, weight: .bold, design: .rounded))
-                        .contentTransition(.numericText(countsDown: true))
-                        .animation(.snappy, value: game.graceSecondsRemaining)
-                    Text("Your score and time are held until this reaches zero.")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-                .padding(32)
+                GraceCard(
+                    title: "POINT AT THE CARD AGAIN",
+                    message: "Your score and time are held until this reaches zero.",
+                    secondsRemaining: game.graceSecondsRemaining
+                )
             }
 
         case .finished:
@@ -128,8 +175,8 @@ private struct ScannerScreen: View {
                     label: game.minigame.settings.resultLabel,
                     value: "\(game.score)",
                     title: game.minigame.settings.resultTitle,
-                    buttonTitle: "Play Again",
-                    action: { game.playAgain() }
+                    restartAction: { game.playAgain() },
+                    finishAction: { close() }
                 )
             }
         }
@@ -147,19 +194,11 @@ private struct ScannerScreen: View {
             .fill(.ultraThinMaterial)
             .ignoresSafeArea()
             .overlay {
-                VStack(spacing: 10) {
-                    Image(systemName: "hand.raised.slash")
-                        .font(.system(size: 44))
-                    Text("Move your hand away   ")
-                        .font(.title3.weight(.semibold))
-                    Text("Keep your whole hand in the camera's view.")
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.white.opacity(0.75))
-                }
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.6), radius: 4)
-                .padding(32)
+                HandTooCloseCard(
+                    icon: "hand.raised",
+                    title: "PUT YOUR HAND\nFURTHER AWAY",
+                    message: "Keep your whole hand on the camera view."
+                )
             }
             .transition(.opacity)
     }
@@ -167,11 +206,25 @@ private struct ScannerScreen: View {
     /// Every full-screen run panel sits on the same dimmed backdrop.
     private func dimmed(@ViewBuilder content: () -> some View) -> some View {
         ZStack {
+            // Its own .opacity-only transition — never .scale. A scale transition applies a
+            // geometric transform to the whole already-laid-out subtree, and this rectangle is
+            // full-bleed (.ignoresSafeArea()), so scaling it shrinks the entire black backdrop
+            // toward its center mid-animation, briefly exposing the camera at the edges. That was
+            // the "black overlay glitches and becomes too small" bug — the backdrop was caught in
+            // the same scale meant only for the card.
             Color.black.opacity(0.65)
                 .ignoresSafeArea()
+                .transition(.opacity)
             content()
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
         }
         .foregroundStyle(.white)
+        // Scoped here, not at the top of ScannerScreen.body: an .animation(value:) that high
+        // wraps every button underneath — including the X button's own press-state — in one
+        // ambient spring transaction, which is what made Start need a second tap to register.
+        // Keeping it local to this helper means only a dimmed() panel's own appear/disappear
+        // animates; nothing else's gestures get caught in it.
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: game.phase)
     }
 
     // MARK: Status

@@ -15,12 +15,21 @@
 
 import Foundation
 
-/// The 3 · 2 · 1 between tapping Start and the first grab.
-private let countdownDuration: TimeInterval = 3
+/// The 3 · 2 · 1 · START! between tapping Start and the first grab. Four beats, ~1s each —
+/// `publish()`'s bucket math (`ceil(countdownLeft) - 1`) is tuned to this value.
+private let countdownDuration: TimeInterval = 4
 
 /// How long a run survives with its card off camera and no hand to lock it. Long enough to
 /// re-aim a phone, short enough that a run cannot be parked indefinitely.
 private let graceDuration: TimeInterval = 3
+
+/// How long `.instructions` tolerates the card reading as lost before it actually resets. Not a
+/// grace period — that protects a score and a clock that don't exist yet, see `update`'s comment
+/// — this only survives a single dropped tracking frame (a hand tremor, a slight angle change
+/// while reaching for Start) so it can't tear the Start button out from under a tap-in-progress.
+/// Same order of magnitude as `PinchInteraction.handPoseLossTimeout`, same kind of problem: one
+/// dropped frame shouldn't read as a real loss.
+private let instructionsLossTimeout: TimeInterval = 0.3
 
 /// One playthrough on one Simulation card.
 ///
@@ -67,7 +76,7 @@ final class GameSession {
     /// Whole seconds, for the overlays. Written only when the displayed value actually changes:
     /// `@Observable` notifies on every set without comparing, and these are set once a frame.
     private(set) var secondsRemaining = 0
-    private(set) var countdownNumber = Int(countdownDuration)
+    private(set) var countdownText = "3"
     private(set) var graceSecondsRemaining = Int(graceDuration)
 
     /// The clocks themselves, counted down in `update(cardPresent:now:)`.
@@ -81,6 +90,10 @@ final class GameSession {
 
     /// What `grace` goes back to if the card returns in time.
     @ObservationIgnored private var phaseBeforeGrace: Phase = .playing
+
+    /// When `.instructions` first saw the card missing — nil while it's present. Debounces a
+    /// single dropped tracking frame; see `instructionsLossTimeout`.
+    @ObservationIgnored private var instructionsCardLostSince: Date?
 
     /// Previous `update` timestamp, for the elapsed delta. Cleared whenever the clocks are
     /// reset, so a paused or freshly started run does not eat the time it spent stopped.
@@ -142,6 +155,7 @@ final class GameSession {
         countdownLeft = countdownDuration
         graceLeft = graceDuration
         lastUpdate = nil
+        instructionsCardLostSince = nil
         self.phase = phase
         publish()
     }
@@ -168,7 +182,19 @@ final class GameSession {
             // has started yet, so there is nothing to hold: the screen goes away with the card
             // rather than sitting over a camera no longer pointed at one. The next card seen
             // puts the instructions back up from scratch.
-            if !cardPresent { reset() }
+            //
+            // `instructionsLossTimeout` debounces this: reacting to `cardPresent` going false on
+            // the very first frame means a single dropped tracking frame — a hand tremor while
+            // reaching for Start — tears the button out from under a tap already in flight. This
+            // is not the grace period the comment above disclaims; it's short enough that it
+            // cannot be used to park the screen, only to survive one bad frame.
+            if cardPresent {
+                instructionsCardLostSince = nil
+            } else {
+                let lostSince = instructionsCardLostSince ?? now
+                instructionsCardLostSince = lostSince
+                if now.timeIntervalSince(lostSince) >= instructionsLossTimeout { reset() }
+            }
 
         case .countdown:
             guard cardPresent else { enterGrace(); break }
@@ -213,8 +239,9 @@ final class GameSession {
         let seconds = Int(timeLeft.rounded(.up))
         if secondsRemaining != seconds { secondsRemaining = seconds }
 
-        let count = max(1, Int(countdownLeft.rounded(.up)))
-        if countdownNumber != count { countdownNumber = count }
+        let bucket = max(0, Int(countdownLeft.rounded(.up)) - 1)
+        let text = bucket > 0 ? "\(bucket)" : "START!"
+        if countdownText != text { countdownText = text }
 
         let grace = max(0, Int(graceLeft.rounded(.up)))
         if graceSecondsRemaining != grace { graceSecondsRemaining = grace }

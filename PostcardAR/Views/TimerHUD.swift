@@ -32,10 +32,13 @@ struct TimerHUD: View {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(DesignTokens.progressGradient)
                     .frame(width: fillWidth, height: trackHeight)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: current)
 
                 Text("\(current)/\(total)")
                     .font(.custom("InterVariable", size: 13.71))
                     .foregroundStyle(DesignTokens.blackText)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: current)
                     .offset(x: 109)
             }
         }
@@ -49,34 +52,6 @@ struct TimerHUD: View {
         guard total > 0 else { return 0 }
         return trackWidth * CGFloat(current) / CGFloat(total)
     }
-}
-
-// DEBUG PREVIEW ONLY
-private struct TimerHUDDebugPreview: View {
-    @State private var current = 3
-    private let total = 8
-
-    var body: some View {
-        ZStack(alignment: .top) {
-            Color(hex: 0x081A49).ignoresSafeArea()
-            TimerHUD(secondsRemaining: 30, current: current, total: total)
-                .padding(.top, 86)
-
-            VStack {
-                Spacer()
-                HStack(spacing: 16) {
-                    Button("-1") { current = max(0, current - 1) }
-                    Button("+1") { current = min(total, current + 1) }
-                }
-                .buttonStyle(.borderedProminent)
-                .padding(.bottom, 40)
-            }
-        }
-    }
-}
-
-#Preview {
-    TimerHUDDebugPreview()
 }
 
 #Preview {
