@@ -15,8 +15,9 @@
 
 import Foundation
 
-/// The 3 · 2 · 1 between tapping Start and the first grab.
-private let countdownDuration: TimeInterval = 3
+/// The 3 · 2 · 1 · START! between tapping Start and the first grab. Four beats, ~1s each —
+/// `publish()`'s bucket math (`ceil(countdownLeft) - 1`) is tuned to this value.
+private let countdownDuration: TimeInterval = 4
 
 /// How long a run survives with its card off camera and no hand to lock it. Long enough to
 /// re-aim a phone, short enough that a run cannot be parked indefinitely.
