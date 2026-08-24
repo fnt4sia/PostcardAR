@@ -15,10 +15,12 @@ one.
    is a *showcase* card that only stands its model up to be looked at. See `docs/simulation.md`.
 6. **Which minigame is decided by the model's contents, not its name** — `CoralPlantPoint*` inside
    it means the planting game, `Drupella*` the removal game. See `docs/simulation.md`.
-7. One gesture exists, on simulation cards only: pinch to pick up a grabbable entity and drag it —
-   see `docs/interaction.md`. Nothing else on the model responds to touch.
-8. A model of either kind may carry `Annotation*` entities, which draw explanation labels from a
-   `.json` file of the same name as the card. See `docs/annotations.md`.
+7. Two gestures, and they never overlap. **Pinch**, on simulation cards only, picks up a grabbable
+   entity and drags it — read from the camera by Vision, never from the screen; see
+   `docs/interaction.md`. **Tap**, on the screen, opens or closes an annotation panel and does
+   nothing else at all. Neither moves, selects or otherwise disturbs a model.
+8. A model of either kind may carry `ANNO*` entities, which build explanation labels — billboarded
+   panels in the scene — from a `.json` file of the same name as the card. See `docs/annotations.md`.
 
 Adding a card is two files — an image in the resource group and a `.usdz` of the same name — and no
 code change; a third, `<name>.json`, if it has annotations. Nothing in the source names an
@@ -29,10 +31,12 @@ individual card.
 | Name | Means |
 |---|---|
 | `Simulation*` (card) | runs a minigame; anything else is a showcase card |
-| `Annotation*` | a point to hang an explanation label on |
+| `ANNO*` | a point to hang an explanation label on; its panel is built into the scene on a ring around the model, closed until its dot is tapped |
 | `Drupella*` | a grabbable snail; `*_Outline` is its outline mesh |
 | `CoralPlantPoint*` | a slot a coral can be planted into — and the marker that a model *is* the planting game |
+| `CoralPlate*` | optional; the visible socket for the point of the same number, pulsed while that slot is free |
 | `SingleCoral*` | a coral that can be picked up and planted |
+| `Seafloor*` (in a model) | this model brings its own ground, so the shared `Seafloor.usdz` is not laid under it |
 
 ## Stack
 
@@ -62,14 +66,18 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 
 | Path | Purpose |
 |---|---|
-| `PostcardAR/ContentView.swift` | Start button, the camera screen's status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
+| `PostcardAR/ContentView.swift` | Start button, the loading/camera swap, the status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
+| `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan. Owns `fit`, `removeCameras`, `modelWidths` |
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
 | `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — the grabbable pool, both minigames' grab/release rules, hand-pose sampling, haptics |
-| `PostcardAR/Annotations.swift` | Explanation labels: finding `Annotation*` entities, reading their JSON, projecting them to the screen |
-| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the 30 s run, the 3 s grace. Shared by both minigames |
+| `PostcardAR/Annotations.swift` | Explanation labels: finding `ANNO*` entities, reading their JSON, and building the billboarded panels into the scene |
+| `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the run, the 3 s grace. Shared by both minigames |
+| `PostcardAR/Minigame.swift` | The two games' settings: run length and every word the player reads. One block per game |
+| `PostcardAR/Views/` | The Figma-traced screens — home, loading, instructions, countdown, HUD, result — and `DesignTokens` |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
 | `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
 | `PostcardAR/<image name>.json` | Annotation text for that card, if it has any — see `docs/annotations.md` |
+| `PostcardAR/Seafloor.usdz` | Not a card. The shared ground plane laid under every model that does not bring its own — see `docs/models.md` |
 | `README.md` | What the project is, how to run it, how to add a card |
 | `docs/` | Design notes, one file per area |
 
@@ -84,7 +92,7 @@ Documentation is split by area, and each file owns its topic:
 | `docs/app-shell.md` | SwiftUI, the `UIViewRepresentable` bridge, the status panel |
 | `docs/interaction.md` | Pinch pickup: Vision hand-pose sampling, grab/drag/release, tuning |
 | `docs/simulation.md` | Card kinds, which minigame a model is, both games' rules, the run's phases and clocks, scoring |
-| `docs/annotations.md` | Explanation labels: the `Annotation*`/JSON pairing, and why they are drawn in screen space |
+| `docs/annotations.md` | Explanation labels: the `ANNO*`/JSON pairing, the ring layout, and why a panel is a texture rather than a SwiftUI view |
 | `docs/troubleshooting.md` | Symptom → cause, starting from the status panel |
 
 The Xcode target uses a synchronized folder group, so any file added under `PostcardAR/`
@@ -101,7 +109,12 @@ until ARKit tracks its image, so cards that are not on camera cost nothing.
 ```
 worldRoot (static)     <- AnchorEntity(world: .zero), added once, never written to
   └── pivot            <- smoothed world pose, and the `isEnabled` that drives visibility/lock
-        └── model      <- <image name>.usdz, animations play here
+        ├── mask       <- generated quad at the card's own printed size, hiding the artwork
+        ├── seafloor   <- shared Seafloor.usdz, sized to the *card*, top surface just above y=0
+        └── model      <- <image name>.usdz, sized by `fit` to `modelWidths`, base at y=0
+
+        All three are siblings, so they are rigidly attached to each other and to the card. The
+        floor is never a child of the model: `fit` measures the model's own bounds.
 
 AnchorEntity(.image)   <- ARKit rewrites this transform every frame. Never modify it, never
                           parent anything visible under it — see "Visibility" below.
@@ -295,10 +308,22 @@ that would have to agree across the reference image *and* the `.usdz`. The game 
 grabbable piece, not once for the app, because the pool is shared across cards and two cards running
 different games can be in frame together.
 
-Both games share `GameSession` unchanged — same phases, same 30 s clock, `+1` a piece — but they
-score at **opposite ends of the gesture**, and that is forced, not stylistic. Removal scores at the
-grab because a grabbed snail always ends up removed; planting scores at the plant because a grabbed
-coral may never reach a point. Full account in `docs/simulation.md`.
+Both games share `GameSession` unchanged — same phases, same clock, `+1` a piece, and both score at
+the moment their gesture actually **succeeds**: a coral when it seats in a plant point, a snail when
+it is let go of clear of the coral rather than put back on it. Nothing is scored at the grab, which
+is only a piece in hand.
+
+What differs between them is settings, not code, and all of it lives in `Minigame.swift`: the run
+length (30 s removal, 45 s planting — carrying a coral to a named slot is the slower gesture) and
+every word on the instructions and result panels. `ContentView` reads that off `game.minigame`, so
+nothing in the UI knows which game is on. Full account in `docs/simulation.md`.
+
+**Clearing the card ends the run on the spot.** `GameSession` is told the run's `target` in
+`begin(_:target:)` — every snail on the card, or the smaller of the corals and plant points — and
+`scored()` goes straight to `finished` on reaching it. Achieving the object of the game is the
+ending; sitting out the rest of the clock with nothing left to pick up is only a wait. The target is
+counted from the model at load time by `PinchInteraction.setup(for:)`, so it stays a property of the
+`.usdz` and no number in the source needs to agree with one in Blender.
 
 The run is a plain state machine in `GameSession.swift`, driven once per rendered frame from
 `onRenderFrame()` and drawn by `runOverlay` in `ContentView.swift`:
@@ -312,7 +337,9 @@ protect but because there is not one yet, so losing the card there calls `reset(
 grace, nothing carried over, the panel goes away with the card and the next card seen starts over.
 That makes an ordering detail load-bearing in `updateGame(cardPresent:candidate:)`: `cardPresent`
 was computed by the card loop before `activeSimulationCard` was claimed, so it reads `false` on the
-claiming frame and must be overridden to `true` there, or `begin()` and `reset()` alternate forever.
+claiming frame and must be overridden to `true` there, or `begin(_:target:)` and `reset()` alternate
+forever. A card only claims the session once `pinch.setup(for:)` answers for it, so a card whose
+model is still loading, or which holds nothing to play with, puts no panel up.
 
 Losing the card mid-*run* splits exactly on the lock. Hand in frame: the model stays, the run does
 not notice. No hand: the model hides and the run freezes for 3 s — score and clock held, the card
@@ -320,14 +347,15 @@ returning inside that window resuming where it left, the window expiring wiping 
 next scan starts from zero. The clock **pauses** rather than draining, because losing the card is
 not the player's doing.
 
-Score is `+1` per snail, counted at the grab rather than the release: a grabbed snail always ends
-up removed, so the grab is where it is committed. That is also why a released snail is hidden and
-not deleted — Play Again restores every snail to the local transform it loaded with. Full account
+Score is `+1` per piece, counted where the gesture succeeds — the plant for a coral, the release
+for a snail that comes off rather than going back on. A released snail is hidden rather than
+deleted, so Play Again can restore every piece to the local transform it loaded with. Full account
 in `docs/simulation.md`.
 
 ## Pinch pickup
 
-The one gesture, on simulation cards only: pinch to grab a piece and drag it. Runs on
+The gesture that drives the minigames, on simulation cards only: pinch to grab a piece and drag
+it. Touch is not involved — the only tap in the app opens an annotation. Runs on
 Vision (`DetectHumanHandPoseRequest`), read from the same `capturedImage` ARKit is already
 tracking cards against, sampled at 15 Hz — independent of and slower than the 60 fps render loop,
 and guarded against overlapping inference. Grab is gated on `phase == .playing` and is then
@@ -335,7 +363,7 @@ nearest-piece-by-screen-projection within `pinchPickRadius`, not a hit test; a h
 the pinch point at fixed camera depth. All of that is shared by both games.
 
 Release is where they part, on the held piece's own `Grabbable.game`. A **snail** near its home slot
-snaps back and un-scores, otherwise fades and hides for good. A **coral** near a free plant point on
+snaps back and scores nothing, otherwise fades, hides for good and scores. A **coral** near a free plant point on
 its own model seats itself there and scores, taking the point's rotation as well as its position,
 otherwise glides back to where it started — a coral never fades and is never lost, because a model
 ships only so many. A planted coral keeps the `removed` flag from its grab, so it cannot be taken
@@ -354,10 +382,14 @@ be carried somewhere first, or corals authored beside their slots plant themselv
 are grabbed and can never be moved.
 
 **Nothing in the app draws a plant point**, and it should stay that way. A `CoralPlantPoint*` is
-registered exactly as the model ships it — geometry untouched, transform read but never written — so
-the indicator is the asset's job. An app-drawn disc was built and removed: sizing one against an
-arbitrary model is guesswork the model can answer directly. A coral takes its point's rotation, so a
-point whose transform the exporter baked flat plants corals upright; author them as empties.
+registered exactly as the model ships it — geometry untouched, transform read but never written. The
+only thing the app adds is *emphasis*: a paired `CoralPlate*` has its opacity breathed while its slot
+is free and held solid when it is the slot a held coral would drop into, so there is no size to get
+wrong. Two app-drawn discs were built and removed for exactly that reason — one sized from the corals
+covered 96% of the gap between slots and fused ten markers into one blob.
+
+A coral takes its point's rotation, so a point whose transform the exporter baked flat plants corals
+upright; author them as empties.
 
 **When AR geometry looks wrong, dump the asset before theorising.** ModelIO loads a `.usdz`
 headlessly and prints every prim's name, transform and bounds in a few lines of Swift. Two successive
@@ -377,7 +409,7 @@ Full mechanism, including the open/close debounce and the Vision coordinate-spac
 Anchoring does not scale. A `.usdz` renders at whatever real-world size it was authored at,
 regardless of how big its card is. So each model is measured with `visualBounds` at load time and
 scaled to a fixed target width in metres, looked up by card name in `modelWidths` (falling back
-to `defaultModelWidth`) — see `fit(_:named:)`. Deliberately not derived from the card's own
+to `defaultModelWidth`) — see `fit(_:named:)` in `ModelLibrary.swift`. Deliberately not derived from the card's own
 printed width: that field is what ARKit tracks against, and coupling model size to it would mean
 two differently-sized cards could never carry equally-sized models. This keeps the model's
 authored scale irrelevant, and each card's on-screen size is one tunable number.
@@ -386,26 +418,83 @@ Nothing is repositioned at load time — a `SingleCoral*` stays exactly where th
 a `Drupella*` — so `fit` measures the whole model with no special case, and the arrangement being
 sized is the arrangement that ends up on screen.
 
+**The card mask and the shared seafloor are sized from the card instead**, and deliberately so:
+covering the printed artwork is their whole job, so `ARReferenceImage.physicalSize` is the only
+correct input for both.
+
+The seafloor takes a uniform **`min`** of the two axis ratios — a *contain* fit, so the floor never
+spills past the card's edge; the asset is authored to the card's proportions, so it lands 0.26 mm
+short on width and exact on depth. Only `Seafloor_Sand*` is measured, since the pebbles scatter past
+the sand's edge. **Its `y` is what stops models looking like they fly:** `fit` stands models base-at
+y = 0, and `seafloorEmbed` puts the sand's *top* just **above** that plane, so a model is sunk into
+the sand rather than balanced on its highest grain. Positive, and roughly the sand's own 4.6 mm of
+undulation. The earlier version pushed the floor 3 mm *down* and that is exactly why models hovered.
+A model much wider than the card cannot look attached to a card-sized floor, so `modelWidths` has to
+stay under about 0.14 for any card using it.
+`Coordinator.mask(for:)` generates a quad at that size — plus `cardMaskBleed`, since a reference
+image is rarely cropped to the exact millimetre of the print and an exact-size mask leaves a sliver
+of card edge showing. It uses `generatePlane(width:depth:)`, **not** `(width:height:)`: the first
+builds the plane in XZ, which is the card's own plane, so the mask needs no rotation.
+
+Its colour and material are **sampled from `Showcase_Biorock.usdz`'s `Seafloor_SandMat`**, not
+chosen: `#A99F8B` averaged over that bake's non-padding pixels, at its own roughness 0.95 and
+metallic 0, so the mask reads as ground and agrees with the models' own sand under room light. It
+is lit rather than unlit for exactly that reason — an unlit quad renders at its authored value and
+drifts away from the lit geometry beside it. Full account in `docs/models.md`.
+
 ## Imported models carry a whole scene
 
 A `.usdz` from Blender contains the lighting rig and the viewport camera, not just the mesh.
 RealityKit turns a USD `Camera` prim into a real `PerspectiveCamera` entity, and adding one to
 an `ARView` scene hands rendering to it — **the passthrough camera freezes**, with no error and
-nothing in the log. `removeCameras(from:)` strips them at load time; do not remove that call.
+nothing in the log. `ModelLibrary.removeCameras(from:)` strips them at load time; do not remove that call.
 
-Imported lights come in as inert entities and are left alone.
+Imported lights come in as inert entities and are left alone — **a Blender light in a `.usdz`
+lights nothing here, and no setting changes that.** `ARView(cameraMode: .ar)` lights the scene from
+ARKit's environment probe, i.e. the real room, which is what makes a model look like it is on the
+table. Bake lighting into textures (as `BakedBaseColor`/`BakedCoral_*`/`Bake_Sand` already do), or
+add a real `DirectionalLightComponent`/`PointLightComponent`/`SpotLightComponent` in code.
+
+**Nothing auto-plays either.** RealityKit imports animation into `Entity.availableAnimations` and
+leaves it *stopped*. `Coordinator.play(in:)` starts every clip looping at load, walking the whole
+tree — RealityKit hangs the animation library on whichever entity the clip targets, not necessarily
+the root. Before blaming that code, check the animation survived export at all:
+`usdcat --flatten *.usdc | grep -c timeSamples` returns `0` for every `.usdz` in this project today,
+so there is currently nothing for it to play. See `docs/models.md`.
 
 Diagnose an imported asset by walking the loaded entity tree and printing components, rather
 than by reading the file size — the shipped coral is 9 MB and froze the camera, while a 52 MB
 model did not.
 
+## Loading, and where it happens
+
+**Nothing loads inside the camera screen.** `ModelLibrary` reads the reference images and every
+model once per launch, behind `LoadingView`, and `Coordinator.start(in:)` only clones what is
+already there. Three things forced that shape, and undoing any of them brings back a hang:
+
+1. `ARReferenceImage.referenceImages(inGroupNamed:)` is synchronous and decodes every card image
+   in the group to full-size RGBA. Called from `makeUIView` — which is where it used to be — it
+   blocks the presentation of the camera screen. It now runs in a detached task.
+2. **Reference images have a resolution ceiling.** ARKit gains nothing above ~1800px on the long
+   edge; the two cards once shipped at 5855 × 7605, which is 356 MB of bitmap to decode before the
+   camera could appear. See "Resolution" in `docs/reference-images.md`.
+3. `ScannerScreen` lives in a `fullScreenCover`, so it and its coordinator are destroyed on
+   dismiss. The library is `@State` on `ContentView`, one level *above* the cover, which is what
+   makes it survive — put it inside and every scan reloads everything, as it once did.
+
+`model(named:)` hands out `clone(recursive:)` rather than the model itself. A scan mutates what it
+is given — corals get planted, snails get hidden, annotation markers lose their geometry — and
+`PinchInteraction` reads each piece's *current* transform as the `home` it restores to, so reusing
+one tree would record a planted coral's slot as its home. Clones share `MeshResource` and
+materials, so nothing is re-uploaded.
+
 ## Model weight
 
 Everything runs on the main thread alongside ARKit and SwiftUI, so a heavy `.usdz` stalls the
 camera rather than degrading gracefully. Budget **512×512 textures** and **under ~50k
-triangles**, and note that the budget is now shared: every card's model is loaded at launch and
-stays resident, so ten cards means ten models in memory. Models load one after another rather
-than concurrently — decoding is main-thread work either way, so overlapping them only makes a
+triangles**, and note that the budget is shared: every card's model is loaded at launch and stays
+resident, so ten cards means ten models in memory. Models load one after another rather than
+concurrently — decoding is main-thread work either way, so overlapping them only makes a
 longer stall. File size is not the measure — a `.usdz` is a zip of uncompressed assets, and a
 2048² texture costs ~21 MB of GPU memory with mipmaps however well its PNG compressed. See
 "Weight" in `docs/models.md` for how to check and reduce an asset.

@@ -27,14 +27,9 @@ import ARKit
 import Combine
 import RealityKit
 import SwiftUI
+import UIKit // `UIColor`, for the card mask
 
 // MARK: - Tuning
-
-/// The AR Resource Group in `Assets.xcassets`. Every reference image inside it is tracked, and
-/// each one shows the `.usdz` in the bundle carrying the same name — an image called `postcard`
-/// needs `postcard.usdz`. Adding a card is those two files and nothing else; there is no list
-/// of names in the code to keep in step.
-private let resourceGroupName = "AR Resources"
 
 /// A reference image whose name starts with this is a *Simulation* card and runs a minigame;
 /// every other card is a *Showcase* card that only stands its model up to be looked at. See
@@ -45,20 +40,6 @@ private let resourceGroupName = "AR Resources"
 /// `Drupella` prefix `PinchInteraction.collect(from:named:report:)` matches on.
 private let simulationCardPrefix = "Simulation"
 
-/// Each card's model, sized to a fixed on-screen width in metres — deliberately independent of
-/// the card's own printed width (`ARReferenceImage.physicalSize`, which ARKit tracks against),
-/// so a small card can carry a large model and vice versa without the two fighting. The dial for
-/// model size: `fit(_:named:)` measures the model at load time and makes its authored scale
-/// irrelevant, so only these numbers matter. Keyed by card name; a card missing here falls back
-/// to `defaultModelWidth`.
-private let modelWidths: [String: Float] = [
-    "Showcase_postcard": 0.08,
-    "Simulation_coral_with_drupella": 0.55,
-]
-
-/// Width a card without an entry in `modelWidths` is sized to.
-private let defaultModelWidth: Float = 0.2
-
 /// Pose filtering, applied in `hold(_:)`. Movement smaller than a dead band is treated as
 /// tracking noise and refused outright; anything larger is glided toward by `smoothingFactor`
 /// of the remaining gap per rendered frame (~60 fps).
@@ -68,6 +49,43 @@ private let defaultModelWidth: Float = 0.2
 private let positionDeadBand: Float = 0.001         // metres
 private let rotationDeadBand: Float = 2 * .pi / 180 // radians
 private let smoothingFactor: Float = 0.15
+
+// MARK: - The card mask
+
+/// A flat quad laid over each card at its own printed size, so the printed artwork is hidden the
+/// moment the card is tracked and what stands on it is the only thing to look at.
+///
+/// Generated rather than authored: it is exactly the card's rectangle and one flat colour, so
+/// there is nothing for a `.usdz` to contribute and nothing to keep in step per card. It hangs
+/// off the pivot beside the model, so it appears, hides, and locks with that card like everything
+/// else on it, and it is ordinary geometry — people occlusion still draws hands in front of it.
+
+/// What the card is painted over with: the sand of `Showcase_Biorock.usdz`'s own seafloor, so a
+/// covered card reads as ground the models are standing on rather than as a coloured panel.
+///
+/// Sampled from `Seafloor.usdz`'s own `Bake_Sand.png` — the floor that now sits on top of it — so
+/// the sliver of mask showing past the floor's edge is the same colour as the floor.
+/// Measured over the sand only: the file is a UV bake and 46% of it is black padding, which drags a
+/// naive average toward a muddy dark olive. Across the real pixels the mean (`#A99D88`) and the
+/// per-channel median (`#A89D88`) agree to a single unit.
+private let cardMaskColor = UIColor(red: 0xA9 / 255, green: 0x9D / 255, blue: 0x88 / 255, alpha: 1)
+
+/// Roughness of the mask, copied from `Seafloor_SandMat`'s own `UsdPreviewSurface`. Near-matte, so
+/// the mask takes the room's light the way the model's sand does and the two agree where they meet
+/// — without a specular highlight streaking across a plane this large.
+private let cardMaskRoughness: Float = 0.95
+
+/// How much bigger than the printed card the mask is drawn, as a multiple.
+///
+/// Not 1.0 on purpose: the reference image is rarely cropped to the exact millimetre of the print,
+/// and the pose filter is always a hair behind the card, so an exact-size mask leaves a sliver of
+/// printed edge showing on one side or another. A few percent of overhang costs nothing and is
+/// what makes the cover look deliberate.
+private let cardMaskBleed: Float = 1.06
+
+/// How far under the card's surface the mask sits, in metres. Models are fitted base-at-y = 0, so
+/// without this a model with a flat bottom face co-planar with the mask would z-fight against it.
+private let cardMaskDrop: Float = 0.001
 
 // MARK: - Status
 
@@ -114,8 +132,12 @@ struct PostcardARView: UIViewRepresentable {
     let game: GameSession
     let annotations: AnnotationLayer
 
+    /// Already loaded by the time this view exists — `ContentView` shows `LoadingView` until it
+    /// is. Nothing here waits for anything.
+    let library: ModelLibrary
+
     func makeCoordinator() -> Coordinator {
-        Coordinator(status: status, game: game, annotations: annotations)
+        Coordinator(status: status, game: game, annotations: annotations, library: library)
     }
 
     func makeUIView(context: Context) -> ARView {
@@ -165,6 +187,11 @@ extension PostcardARView {
             /// Showcase or simulation, decided by `name`'s prefix at build time of the array.
             let kind: CardKind
 
+            /// The printed card's real-world size, straight off `ARReferenceImage.physicalSize`.
+            /// Read for one thing only: sizing this card's mask to cover it. The card's *model*
+            /// is deliberately not sized from it — see `modelWidths` in `ModelLibrary`.
+            let size: CGSize
+
             /// ARKit's. Its transform is the card's raw pose, re-solved from scratch every frame.
             ///
             /// Never write to it. *Every* `AnchorEntity` carries an `AnchoringComponent`, and
@@ -209,43 +236,51 @@ extension PostcardARView {
         /// coordinator and it.
         private let pinch: PinchInteraction
 
-        /// The explanation labels on every loaded model, and where they land on screen. See
-        /// `Annotations.swift`.
+        /// The explanation labels on every loaded model. See `Annotations.swift`.
         private let annotations: AnnotationLayer
 
-        /// Held for `annotations.update(in:)`, which needs to project world points into the view.
+        /// Held so a tap can be projected against the annotation dots — `handleTap(_:)` needs both
+        /// the tap's location in the view and the view to project world points into.
         private weak var arView: ARView?
 
-        init(status: ARStatus, game: GameSession, annotations: AnnotationLayer) {
+        /// The reference images and models, loaded once for the whole app. This coordinator is
+        /// rebuilt on every scan; the library is not, which is what makes the second scan instant.
+        private let library: ModelLibrary
+
+        init(status: ARStatus, game: GameSession, annotations: AnnotationLayer,
+             library: ModelLibrary) {
             self.status = status
             self.game = game
             self.annotations = annotations
+            self.library = library
             self.pinch = PinchInteraction(game: game)
         }
 
-        /// Starts tracking, builds an `anchor -> pivot` branch per reference image, and begins
-        /// loading their models.
+        /// Starts tracking, builds an `anchor -> pivot` branch per reference image, and hangs each
+        /// card's model on it.
+        ///
+        /// Nothing is loaded here any more. `ModelLibrary` did all of it before this screen was
+        /// built — decoding the reference images used to happen on this thread, inside the camera
+        /// screen's presentation, which is what made "Scan a Card" hang.
         func start(in arView: ARView) {
             guard ARWorldTrackingConfiguration.isSupported else {
                 report("World tracking needs a real device, not the simulator.")
                 return
             }
 
+            // Whatever went wrong at load time, said once here: the status panel did not exist
+            // when the library ran.
+            for message in library.errors { report(message) }
+
             // World tracking, not image tracking: image tracking has no world origin, so panning
             // past a stationary card reads to the filter as the card moving. World tracking gives
             // the image anchor a room-fixed pose instead. See docs/tracking.md.
-            let referenceImages = ARReferenceImage.referenceImages(
-                inGroupNamed: resourceGroupName,
-                bundle: nil
-            ) ?? []
+            let referenceImages = library.referenceImages
 
-            guard !referenceImages.isEmpty else {
-                report("No reference images in the \"\(resourceGroupName)\" group.")
-                return
-            }
+            guard !referenceImages.isEmpty else { return }
 
             let configuration = ARWorldTrackingConfiguration()
-            configuration.detectionImages = referenceImages
+            configuration.detectionImages = Set(referenceImages)
             // Required, not cosmetic: defaults to 0, under which a detected image is posed once
             // and frozen — the exact failure image tracking was chosen to avoid.
             configuration.maximumNumberOfTrackedImages = referenceImages.count
@@ -267,6 +302,13 @@ extension PostcardARView {
             self.arView = arView
             pinch.attach(to: arView)
 
+            // Tap to open an annotation. The one touch gesture in the app, and it reaches only the
+            // annotation dots — see `handleTap(_:)`. SwiftUI's Close button and the run's panels sit
+            // in overlays *above* the `ARView`, so a tap on either never arrives here.
+            let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+            arView.addGestureRecognizer(tap)
+            annotations.prepareHaptics()
+
             // Fixed at the world origin and never rewritten — a static parent so pivots stay in
             // the visible tree even when their own image anchor goes untracked.
             let worldRoot = AnchorEntity(world: .zero)
@@ -275,13 +317,13 @@ extension PostcardARView {
             // Every anchor goes in up front. An image anchor draws nothing and costs nothing
             // until ARKit tracks its image, so the ones not on camera are free.
             //
-            // Sorted only to stop the status list reshuffling: `referenceImages` is a `Set`.
-            for image in referenceImages.sorted(by: { ($0.name ?? "") < ($1.name ?? "") }) {
+            // Already sorted by name, by the library — only so the status list does not reshuffle.
+            for image in referenceImages {
                 // An unnamed entry cannot be anchored to or matched to a `.usdz`. Xcode names
                 // them from the filename, so this is close to unreachable.
                 guard let name = image.name else { continue }
 
-                let anchor = AnchorEntity(.image(group: resourceGroupName, name: name))
+                let anchor = AnchorEntity(.image(group: arResourceGroupName, name: name))
                 let pivot = Entity()
                 // Off until this card is actually tracked. A pivot hangs off the static
                 // `worldRoot`, not off its own image anchor, so nothing hides it for us: left
@@ -295,6 +337,7 @@ extension PostcardARView {
                 cards.append(Card(
                     name: name,
                     kind: name.hasPrefix(simulationCardPrefix) ? .simulation : .showcase,
+                    size: image.physicalSize,
                     anchor: anchor,
                     pivot: pivot
                 ))
@@ -302,11 +345,23 @@ extension PostcardARView {
 
             status.totalImages = cards.count
             subscribeToRenderLoop(of: arView)
-            loadModels()
+            attachModels()
         }
 
         func session(_ session: ARSession, didFailWithError error: any Error) {
             report(error.localizedDescription)
+        }
+
+        /// Opens or closes the annotation nearest the tap.
+        ///
+        /// Deliberately the *only* thing a touch does anywhere in the app. It does not select, move
+        /// or otherwise disturb the models: a tap that lands nowhere near a dot is ignored outright,
+        /// which is what keeps "the model does not respond to touch" true everywhere it matters —
+        /// the minigames are still driven entirely by the pinch, which is Vision-based and never
+        /// touches the screen.
+        @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let arView else { return }
+            annotations.toggle(at: recognizer.location(in: arView), in: arView)
         }
 
         /// Adds a line to the status panel, dropping repeats. The panel is not a log, and
@@ -419,7 +474,8 @@ extension PostcardARView {
 
             updateGame(cardPresent: activeCardPresent, candidate: trackedSimulation)
             pinch.update()
-            if let arView { annotations.update(in: arView) }
+            // Annotations need no per-frame work: they are entities under each card's pivot, so
+            // RealityKit moves, hides and billboards them along with the model.
         }
 
         // MARK: The run
@@ -431,9 +487,13 @@ extension PostcardARView {
         private func updateGame(cardPresent: Bool, candidate: String?) {
             var present = cardPresent
 
-            if activeSimulationCard == nil, let candidate {
+            // A card only claims the session once its model has arrived and turned out to hold
+            // something to play with — `setup(for:)` is `nil` until then. That is what keeps the
+            // instructions panel off a card whose `.usdz` is still loading, and off one that has
+            // neither plant points nor snails (already reported to the status panel).
+            if activeSimulationCard == nil, let candidate, let setup = pinch.setup(for: candidate) {
                 activeSimulationCard = candidate
-                game.begin()
+                game.begin(setup.minigame, target: setup.target)
                 // `cardPresent` was worked out in the card loop above, back when no card was the
                 // active one — so it is `false` on this frame however plainly the card is in
                 // view. `candidate` is only ever set from a *tracked* card, so the card is there.
@@ -506,94 +566,91 @@ extension PostcardARView {
 
         // MARK: Models
 
-        /// Loads one `.usdz` per card — the file named after that card's reference image — off
-        /// the critical path, so the camera appears immediately. A pivot is simply childless
-        /// until its model arrives; RealityKit draws whatever is there each frame.
+        /// Hangs each card's model on its pivot, and offers it to the two things that read a
+        /// model's contents.
         ///
-        /// One at a time rather than all at once: decoding happens on the main thread either
-        /// way, so overlapping them would only make a longer stall, and finishing the first card
-        /// early means it is usable while the rest arrive.
-        private func loadModels() {
-            Task { @MainActor in
-                for card in cards {
-                    do {
-                        let model = try await Entity(named: card.name)
-                        removeCameras(from: model)
-                        fit(model, named: card.name)
-                        card.pivot.addChild(model)
-                        // Any card's model may carry `Annotation*` entities; nothing about this
-                        // turns on the card's kind, so both kinds are offered to it.
-                        annotations.collect(from: model, named: card.name, report: report)
-                        // Showcase models are looked at, not touched, so nothing in one ever enters
-                        // the grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to
-                        // find on one. Which minigame a simulation card runs is read from the
-                        // model's own contents, not from its name; see `PinchInteraction.Minigame`.
-                        if card.kind == .simulation {
-                            pinch.collect(from: model, named: card.name, report: report)
-                        }
-                        status.loadedModels += 1
-                    } catch {
-                        report("Could not load \(card.name).usdz: \(error.localizedDescription)")
-                    }
+        /// Synchronous, and fast: `ModelLibrary` already did the decoding, the camera-stripping
+        /// and the scaling, so all that happens here is a clone per card. A card whose `.usdz`
+        /// failed to load has no model and is simply skipped — the reason is already in
+        /// `library.errors`, reported by `start(in:)`.
+        private func attachModels() {
+            for card in cards {
+                guard let model = library.model(named: card.name) else { continue }
+                card.pivot.addChild(model)
+                // Any card's model may carry `ANNO*` entities; nothing about this turns on the
+                // card's kind, so both kinds are offered to it. The pivot rather than the model is
+                // handed over as the container — see `AnnotationLayer.collect(from:in:named:report:)`.
+                annotations.collect(from: model, in: card.pivot, named: card.name, report: report)
+                // Showcase models are looked at, not touched, so nothing in one ever enters the
+                // grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to find on one.
+                // Which minigame a simulation card runs is read from the model's own contents, not
+                // from its name; see `Minigame.swift`.
+                if card.kind == .simulation {
+                    pinch.collect(from: model, named: card.name, report: report)
                 }
+                card.pivot.addChild(mask(for: card))
+                // A sibling of the model, never a child of it: `fit(_:named:)` has already sized the
+                // model against its own bounds, and burying the floor inside it would make every
+                // later measurement of that tree wrong. `nil` for a model that ships its own ground.
+                if let seafloor = library.seafloor(under: model, sizedTo: card.size, report: report) {
+                    card.pivot.addChild(seafloor)
+                }
+                play(in: model)
+                status.loadedModels += 1
             }
         }
 
-        /// Strips any camera the model brought with it.
+        /// Starts every animation a model brought with it, looping forever.
         ///
-        /// A `.usdz` is a scene, not a mesh: exported from Blender it carries the lighting rig
-        /// and the viewport camera too. RealityKit turns a USD `Camera` prim into a real
-        /// `PerspectiveCamera` entity, and adding one to an `ARView` scene hands rendering over
-        /// to it — the passthrough video freezes, with no error and nothing in the log. Imported
-        /// lights are inert and are left alone; cameras are not.
-        private func removeCameras(from entity: Entity) {
-            // Snapshot the children, because the recursive call can remove one of them.
-            for child in Array(entity.children) {
-                removeCameras(from: child)
+        /// **RealityKit never plays an imported animation on its own.** It loads them into
+        /// `availableAnimations` and leaves them stopped, so a `.usdz` that animates perfectly well
+        /// in Blender or Quick Look simply stands still here until something calls this.
+        ///
+        /// Walks the whole tree rather than looking only at the root: RealityKit hangs an
+        /// `AnimationLibraryComponent` on whichever entity the clip actually targets, which for a
+        /// Blender export is usually the animated object rather than the scene root.
+        ///
+        /// Safe on every card. A model with no animations has nothing in `availableAnimations` and
+        /// this does nothing, which is the case for every asset in the project today — see
+        /// "Animation has to be exported *and* played" in `docs/models.md` for how to check whether
+        /// a given `.usdz` actually carries any.
+        ///
+        /// Started once, here, rather than on each detection: the clips loop forever, so a card
+        /// coming into view shows one already running instead of restarting it. `model` is a clone
+        /// (`ModelLibrary.model(named:)`), and cloning copies components, so each card animates on
+        /// its own without disturbing the library's pristine copy.
+        private func play(in entity: Entity) {
+            for animation in entity.availableAnimations {
+                entity.playAnimation(animation.repeat(duration: .infinity),
+                                     transitionDuration: 0, startsPaused: false)
             }
-            if entity.components.has(PerspectiveCameraComponent.self) {
-                entity.removeFromParent()
-            }
+            for child in entity.children { play(in: child) }
         }
 
-        /// Scales a model to its fixed target width (`modelWidths`) and sits it centred on its
-        /// card, base on the surface.
+        /// The quad that hides one card's printed artwork — see `cardMaskColor`.
         ///
-        /// Anchoring supplies position and rotation, never scale, so without this the model
-        /// renders at whatever real-world size it was authored at — a number with no relation to
-        /// either the card or the on-screen size actually wanted. Measuring at load time instead
-        /// means any `.usdz` lands at exactly its target width regardless of authored scale.
-        ///
-        /// The whole model is measured, including a planting card's loose corals — nothing is moved
-        /// at load time, so the arrangement the asset was authored with is the one being sized.
-        private func fit(_ model: Entity, named name: String) {
-            let bounds = model.visualBounds(relativeTo: nil)
-            let targetWidth = modelWidths[name] ?? defaultModelWidth
+        /// `generatePlane(width:depth:)`, not `(width:height:)`: the first builds the plane in XZ
+        /// and the second in XY. The anchor's axes follow the card — x across its printed width,
+        /// z down its printed height, y out of its surface — so XZ *is* the card's own plane, and
+        /// the mask needs no rotation of its own.
+        private func mask(for card: Card) -> Entity {
+            let mesh = MeshResource.generatePlane(
+                width: Float(card.size.width) * cardMaskBleed,
+                depth: Float(card.size.height) * cardMaskBleed
+            )
+            // Lit, not unlit, and matched to `Seafloor_SandMat`: this is meant to read as ground
+            // the models stand on, so it has to take the room's light the way their own sand does.
+            // An unlit quad renders at exactly its authored value and so drifts away from the lit
+            // geometry beside it — too bright in a dim room, too flat in a bright one. Roughness
+            // 0.95 and no metallic is what keeps that from costing a specular streak.
+            var material = PhysicallyBasedMaterial()
+            material.baseColor = .init(tint: cardMaskColor)
+            material.roughness = .init(floatLiteral: cardMaskRoughness)
+            material.metallic = 0.0 // `Metallic` is float-literal only; a bare `0` reads as `Int`
 
-            // Worth reporting rather than skipping quietly: a model authored in metres, left
-            // unscaled at a target width a few centimetres wide, puts the camera inside the mesh.
-            // The screen fills with texture that barely moves, which reads as a frozen app rather
-            // than as a sizing bug.
-            guard targetWidth > 0, bounds.extents.x > 0 else {
-                report("""
-                    Could not size \(name): target width is \(targetWidth) m, model measures \
-                    \(bounds.extents.x) m. Showing it at its authored size.
-                    """)
-                return
-            }
-
-            let scale = targetWidth / bounds.extents.x
-            model.scale = .init(repeating: scale)
-
-            // The anchor's axes follow the card: x across its width, z down its height, y out of
-            // its surface. A model point `p` lands at `scale * p + position`, and the `.usdz`
-            // origin is wherever the artist left it — so centre the measured box in x and z, and
-            // lift the model until the bottom of the box sits at y = 0.
-            model.position = [
-                -bounds.center.x * scale,
-                (bounds.extents.y / 2 - bounds.center.y) * scale,
-                -bounds.center.z * scale
-            ]
+            let entity = ModelEntity(mesh: mesh, materials: [material])
+            entity.position.y = -cardMaskDrop
+            return entity
         }
     }
 }

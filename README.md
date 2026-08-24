@@ -6,11 +6,11 @@ Hold a card up, move it, tilt it — its model stays attached.
 Cards come in two kinds, decided by the front of the card's name:
 
 - **Showcase** — the model is there to be looked at. Nothing to do.
-- **Simulation** — a minigame runs on it. Drupella snails are eating the coral; pinch them off,
-  as many as you can in 30 seconds.
+- **Simulation** — a minigame runs on it. Pinch drupella snails off the coral in 30 seconds, or
+  plant corals onto a biorock frame in 45. Clear the card and the run ends there and then.
 
 Everything is first-party Apple: SwiftUI for the shell, ARKit for tracking, RealityKit for
-rendering, Vision for the pinch gesture. No third-party dependencies, no package manager, four
+rendering, Vision for the pinch gesture. No third-party dependencies, no package manager, seven
 Swift files.
 
 ## Requirements
@@ -52,6 +52,9 @@ PostcardAR/
 ```
 
 1. **Print the card**, and photograph it flat on, evenly lit, no glare, cropped to its edges.
+   Export it at roughly **1400px on the long edge** — ARKit gains nothing above that, and a
+   print-resolution image costs seconds of loading and hundreds of megabytes to decode. See
+   [docs/reference-images.md](docs/reference-images.md).
 2. **Add the image.** In `Assets.xcassets`, select **AR Resources**, drag the image in, and name
    the entry after the model it should show — prefixed `Simulation` if it should run the minigame,
    `Showcase` otherwise. (Only `Simulation` is tested for; any other prefix, or none, is a
@@ -74,13 +77,22 @@ case-sensitive, and anything unmatched is scenery:
 
 | Name it | To get |
 |---|---|
-| `Annotation*` | An explanation label pinned to that point, with text from `<card name>.json`. Works on any card — see [docs/annotations.md](docs/annotations.md). |
+| `ANNO*` | An explanation label pinned to that point, with text from `<card name>.json`. A dot appears on the model; tap it and a panel opens in the scene, on a ring around the model, with a line back to the point. Works on any card — see [docs/annotations.md](docs/annotations.md). |
 | `Drupella*` | A snail to pinch off. A model with these runs the **removal** minigame. |
-| `CoralPlantPoint*` | A slot to plant a coral into. A model with these runs the **planting** minigame. Draw your own marker on it — the app draws nothing. Keep its rotation unbaked and planted corals adopt it. |
+| `CoralPlantPoint*` | A slot to plant a coral into. A model with these runs the **planting** minigame. Keep its rotation unbaked and planted corals adopt it. |
+| `CoralPlate*` | Optional. The visible socket for the point of the same number — `CoralPlate_03` goes with `CoralPlantPoint_03`. The app pulses it while that slot is free. |
 | `SingleCoral*` | A coral to pick up and plant. Stays exactly where you put it in the model. |
+| `Seafloor*` | Opts the card *out* of the shared ground plane, because this model brings its own. |
 
 Which minigame a simulation card runs is read from these, not from the card's name: plant points win
 if both are present. So there is one naming rule to keep in step (image ↔ `.usdz`), not two.
+
+
+The printed card itself is covered over as soon as it is tracked, so design the model to be the
+whole of what the player sees — the artwork is a target, not a backdrop. Every card also gets
+`Seafloor.usdz` laid under its model at the card's own size, with the model planted into it; keep
+that card's `modelWidths` entry under about 0.14 so the model fits on its floor. See
+[docs/models.md](docs/models.md).
 
 ### What usually goes wrong
 
@@ -92,9 +104,9 @@ if both are present. So there is one naming rule to keep in step (image ↔ `.us
 | Everything stutters | Model weight. Budget 512² textures and under ~50k triangles, *shared* across all cards — every model loads at launch and stays resident. |
 | A card with no `.usdz` | Tracks fine, shows nothing, and the status panel names the missing file. |
 | No minigame on a card | Either it is a showcase card — only a name starting `Simulation` runs one, and the `.usdz` needs the same prefix — or the model has no `Drupella*` or `CoralPlantPoint*` entities in it, which the status panel says outright. |
-| Annotations do not appear | The entity name in the `.usdz` and the `"entity"` in the `.json` have to match exactly. Every mismatch is named in the status panel — see [docs/annotations.md](docs/annotations.md). |
+| Annotations do not appear | Panels start closed — tap the dot on the model to open one. If there is no dot either, the entity name in the `.usdz` and the `"entity"` in the `.json` have to match exactly; every mismatch is named in the status panel — see [docs/annotations.md](docs/annotations.md). |
 | A coral will not snap onto a plant point | Carry it at least `plantArmDistance` from where you grabbed it, then bring it within `plantSnapRadius` (80 screen points) of a free point on its own structure. |
-| Nothing shows where corals should go | The app draws nothing at a plant point on purpose. Put a marker on the `CoralPlantPoint*` in your model and it renders with the rest of the structure. |
+| Nothing shows where corals should go | Add a `CoralPlate_NN` to your model beside each `CoralPlantPoint_NN`. The app pulses it while the slot is free and holds it solid when a held coral is about to land there; it draws nothing itself. |
 | The run restarted from zero | The card left frame with no hand in it for more than 3 seconds. Inside 3 seconds the score and clock are held; keeping a hand in frame holds the model indefinitely. |
 | The instructions screen vanished | The card left frame. That screen has no grace period — nothing has started yet, so there is nothing to hold. Point at the card again and it comes back from the start. |
 | The screen blurred, "Move your hand back" | Your hand is too close to the lens for the camera to make out your fingertips, so no pinch can be read. Pull back, or bring your whole hand into frame. |
@@ -126,6 +138,8 @@ while a hand is in frame keeps its model locked in place until the hand leaves �
 | `PostcardAR/PinchInteraction.swift` | Pinch pickup and both minigames' grab/release rules |
 | `PostcardAR/Annotations.swift` | Explanation labels and the JSON behind them |
 | `PostcardAR/GameSession.swift` | The run's phases, score, and clocks, shared by both minigames |
+| `PostcardAR/Minigame.swift` | Each game's run length and on-screen words — one block per game |
+| `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world size |
 | `PostcardAR/<name>.usdz` | The model for the card of that name |
 | `PostcardAR/<name>.json` | Annotation text for that card, if it has any |
@@ -145,7 +159,7 @@ The camera permission string lives in the build settings as
 | [docs/app-shell.md](docs/app-shell.md) | SwiftUI from scratch: views, state, the UIKit bridge, the status panel |
 | [docs/interaction.md](docs/interaction.md) | Pinch pickup: Vision hand-pose sampling, grab/drag/release |
 | [docs/simulation.md](docs/simulation.md) | Showcase vs Simulation cards, which minigame a model is, both games' rules, the run's phases and clocks |
-| [docs/annotations.md](docs/annotations.md) | Explanation labels: the `Annotation*`/JSON pairing, and why they are drawn in screen space |
+| [docs/annotations.md](docs/annotations.md) | Explanation labels: the `ANNO*`/JSON pairing, the ring layout, and why a panel is a texture rather than a SwiftUI view |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom → cause, starting from the status panel |
 
 `CLAUDE.md` is the working agreement for AI-assisted changes to this repo — the invariants that
@@ -158,8 +172,11 @@ own printed size, smoothed so it does not shiver, and drawn only once its own ca
 tracked — scanning one card never brings another card's model with it. Hands occlude the models
 properly (ARKit people occlusion, A12 and later).
 
-Simulation cards run the full loop: instructions, a 3 · 2 · 1, thirty seconds of play with the score
-and clock on screen, then a result with **Play Again**. A card lost while a hand is in frame locks
+Simulation cards run the full loop: instructions, a 3 · 2 · 1, a timed spell of play with the score
+and clock on screen, then a result with **Play Again**. How long that spell is, and every word on
+the instructions and result panels, come from the game being played — see
+[`Minigame.swift`](PostcardAR/Minigame.swift), one block per game. Clearing every piece on the card
+ends the run immediately rather than leaving the clock to run down. A card lost while a hand is in frame locks
 its model in place instead of blinking it out, so reaching into the scene does not make what you are
 reaching for disappear, and the run carries on. A card lost with no hand freezes the run for five
 seconds before wiping it — see [docs/simulation.md](docs/simulation.md).
@@ -181,10 +198,8 @@ Not implemented:
 - **More than one run at a time.** The first simulation card tracked claims the session; a second
   one in frame is only a model. A second run would need a second HUD, so the shape to reach for
   would be a session per card.
-- **A completion ending for PlantingCoral.** Filling every plant point does not end the run early —
-  the 30 s clock always runs out first, exactly as in the removal game.
-- **Un-planting.** A planted coral is committed and cannot be picked back up, so `unscored()` is
-  used only by the removal game's put-back.
+- **Un-planting.** A planted coral is committed and cannot be picked back up. Neither is a removed
+  snail, so nothing ever takes a point back off the board — a put-back simply never scored one.
 - **Pinch gestures on anything but `Drupella*` entities** (scaling or spinning the model itself,
   say). If added, write to the model entity or a second pivot — never to the anchor, and not to
   the existing pivot, whose world transform is rewritten every frame.

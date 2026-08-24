@@ -66,9 +66,36 @@ Good:
 - Shot from the actual printed card, flat on, evenly lit, no glare, cropped exactly to the
   card's edges. The reference image should match what the camera will see.
 - Shortest side at least 480px.
+- **Longest side no more than about 1800px.** See below — this one is a performance requirement,
+  not a tracking one.
 
 Xcode grades the image on build and prints warnings into the asset catalog. Treat those
 warnings as failures, not suggestions — an image that trips them will usually not track at all.
+
+### Resolution: there is a ceiling, and overshooting it is expensive
+
+Detection quality comes from contrast and detail, not from pixel count, and ARKit extracts the
+same features from a 1400px scan as from a 5800px one. Pixels past that ceiling buy nothing and
+cost a great deal, because `ARReferenceImage.referenceImages(inGroupNamed:)` has to decode every
+image in the group to full-size RGBA before it can look at any of it:
+
+| Image | Pixels | On disk | Decoded |
+|---|---|---|---|
+| 5855 × 7605 | 44.5 MP | 5.9 MB | **178 MB** |
+| 1399 × 1818 | 2.5 MP | 1.1 MB | 10 MB |
+
+Both cards shipped at the first size once, so opening the camera screen decoded **356 MB** of
+bitmap — a multi-second hang and a memory spike large enough to be a plausible cause of the
+random stalls that went with it. Downscaling both to 1399 × 1818 changed nothing about detection
+and removed the hang.
+
+The physical size in the Attributes Inspector is unaffected by any of this: it describes the
+printed card in the world, not the file, so re-exporting an image at a different resolution never
+means re-measuring the card.
+
+Export from the original artwork at ~1400px on the long edge rather than handing over a camera
+photo or a print-resolution PDF render. If an oversized image is already in the catalog,
+`sips -Z 1818 <file>` resamples it in place.
 
 ### Detail helps, repetition hurts
 

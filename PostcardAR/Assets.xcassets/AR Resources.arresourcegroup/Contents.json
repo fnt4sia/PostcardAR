@@ -5,13 +5,16 @@
   },
   "resources" : [
     {
-      "filename" : "Showcase_drupella.arreferenceimage"
+      "filename" : "ref-biorock-reef.arreferenceimage"
     },
     {
-      "filename" : "Simulation_coral.arreferenceimage"
+      "filename" : "ref-drupella-cornus.arreferenceimage"
     },
     {
-      "filename" : "Simulation_drupella.arreferenceimage"
+      "filename" : "Simulation_Coral.arreferenceimage"
+    },
+    {
+      "filename" : "Simulation_Drupella.arreferenceimage"
     }
   ]
 }

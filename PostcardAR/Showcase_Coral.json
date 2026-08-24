@@ -1,0 +1,47 @@
+[
+  {
+    "entity": "ANNO_Tentacle",
+    "title": "Tentacles",
+    "body": "A ring of stinging arms around the mouth. They fire tiny harpoons called nematocysts to catch plankton and pull it in."
+  },
+  {
+    "entity": "ANNO_Mouth",
+    "title": "Mouth",
+    "body": "The polyp's only opening. Food goes in and waste comes back out through the same hole."
+  },
+  {
+    "entity": "ANNO_Pharynx",
+    "title": "Pharynx",
+    "body": "A short throat leading from the mouth down into the gut, pulling captured food inside."
+  },
+  {
+    "entity": "ANNO_Stomach",
+    "title": "Stomach",
+    "body": "The gastrovascular cavity, where food is broken down. It doubles as the polyp's circulation."
+  },
+  {
+    "entity": "ANNO_Septum",
+    "title": "Septa",
+    "body": "Vertical partitions dividing the gut. They add digestive surface and anchor the polyp to its stony skeleton."
+  },
+  {
+    "entity": "ANNO_Filament",
+    "title": "Digestive Filaments",
+    "body": "Enzyme-loaded threads along the septa. The polyp can push them out through its body wall to digest food outside itself."
+  },
+  {
+    "entity": "ANNO_Gastrodermis",
+    "title": "Gastrodermis",
+    "body": "The inner tissue lining the gut. It houses the zooxanthellae algae that feed the coral and give it colour."
+  },
+  {
+    "entity": "ANNO_Mesoglea",
+    "title": "Mesoglea",
+    "body": "A jelly-like layer between the two tissue layers, giving the soft body its shape and support."
+  },
+  {
+    "entity": "ANNO_Epidermis",
+    "title": "Epidermis",
+    "body": "The outer skin, facing the sea. It secretes the limestone cup the whole colony is built from."
+  }
+]

@@ -160,16 +160,56 @@ Tapping sets `isScanning = true` → SwiftUI recomputes `body` → `fullScreenCo
 Note what is absent: no navigation controller, no present call, no segue. You changed a boolean
 and described what should be true when it is true. That is the whole paradigm.
 
+### The loading screen, and what it is really for
+
+Pressing **Scan a Card** does not open the camera. It opens onto `LoadingView` — the same screen
+as `HomeView`, same background, grids and notched card, with the title replaced by a progress
+read-out — and the camera screen replaces it once `ModelLibrary.isReady`:
+
+```swift
+@State private var library = ModelLibrary()
+
+HomeView(action: {
+    isScanning = true
+    Task { await library.load() }
+})
+.fullScreenCover(isPresented: $isScanning) {
+    if library.isReady {
+        ScannerScreen(library: library)
+    } else {
+        LoadingView(loaded: library.loaded, total: library.total)
+    }
+}
+```
+
+**The library is `@State` on `ContentView`, above the `fullScreenCover`, and that placement is the
+whole point.** A `fullScreenCover`'s content is built when it presents and destroyed when it
+dismisses, taking `ScannerScreen`, its `ARView` and its `Coordinator` with it. Anything loaded
+inside it is therefore loaded again on the next scan — which is exactly what used to happen: every
+scan re-decoded both reference images and re-loaded both `.usdz` files, so the fifth scan was as
+slow as the first. Owned one level up, the library outlives the cover, `load()` returns
+immediately the second time, and `isReady` is already `true` — so the loading screen is seen once
+per launch and never again.
+
+The loading screen is not the fix for a slow load, and should not be mistaken for one. It makes
+the wait *legible* rather than shorter: what actually made it short was moving
+`ARReferenceImage.referenceImages(inGroupNamed:)` off the main thread and out of the view
+presentation, and cutting the reference images down to a sane resolution — see "Resolution" in
+[reference-images.md](reference-images.md). Loading behind a screen that says so is what is left
+over, and it is worth having for a first launch on a cold device.
+
 ### The camera screen
 
 ```swift
 private struct ScannerScreen: View {
+    let library: ModelLibrary
+
     @Environment(\.dismiss) private var dismiss
     @State private var status = ARStatus()
     @State private var game = GameSession()
 
     var body: some View {
-        PostcardARView(status: status, game: game)
+        PostcardARView(status: status, game: game, library: library)
             .ignoresSafeArea()
             .overlay(alignment: .top) { if showsStatusPanel { statusPanel } }
             .overlay(alignment: .bottom) { Button("Close") { dismiss() } ... }
@@ -245,8 +285,12 @@ gives you a stable object to hand to old-style Objective-C APIs that expect dele
 data sources. It is the standard escape hatch from value-type UI into reference-type frameworks.
 
 Here it holds everything with a lifetime longer than one `body` pass — the session configuration,
-the cards and their entities, their held poses, the render-loop subscription, and the model loads
-— so `makeUIView` is three lines:
+the cards and their entities, their held poses, and the render-loop subscription — so `makeUIView`
+is three lines:
+
+Note what it no longer holds: the loading. A coordinator's lifetime is *one presentation of the
+camera screen*, which is the wrong lifetime for an asset that should be read once per launch. That
+work lives in `ModelLibrary` instead, and `start(in:)` only clones what is already there.
 
 ```swift
 func makeUIView(context: Context) -> ARView {

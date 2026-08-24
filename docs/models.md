@@ -107,6 +107,130 @@ case is worth reporting rather than passing over quietly: a model authored in me
 unscaled on a card a few centimetres wide, puts the camera *inside* the model. The screen fills
 with texture that barely moves, which reads as the app having frozen rather than as a sizing bug.
 
+## The shared seafloor
+
+`Seafloor.usdz` is not a card. It has no reference image, is never in `models`, and is laid under
+every card's model as a ground plane, so a card reads as a patch of reef rather than as a model
+standing on a printed rectangle.
+
+```
+pivot
+  ├── mask                 ← a generated quad at the card's size, hiding the artwork
+  ├── Seafloor.usdz        ← sized to the card by seafloor(under:sizedTo:report:)
+  └── <card name>.usdz     ← the model, sized by fit(_:named:) to modelWidths
+```
+
+All three are siblings under the pivot, so they are rigidly attached to one another and to the card
+— the smoothed card pose moves the whole branch as one. The floor is deliberately **not** a child of
+the model: `fit(_:named:)` measures the model against its own bounds, and burying the floor inside
+it would corrupt every later measurement of that tree.
+
+### Sized to the card, and never past it
+
+The opposite of the rule for models, and deliberately: a model's size is an artistic choice that has
+to stay free of the card's printed size (see "The one dial, per card" above), whereas matching the
+card *is* this thing's whole job. So the input is `ARReferenceImage.physicalSize`.
+
+The scale is uniform and taken as a **`min`** — a *contain* fit, so the floor never spills past the
+card's edge. That costs nothing, because the asset is authored to the card's proportions:
+
+| | Measured | Aspect |
+|---|---|---|
+| card (6 in, 5855 × 7605) | 15.24 × 19.80 cm | 0.7699 |
+| `Seafloor_Sand_m` | 9.747 × 12.682 units | 0.7686 |
+| **floor as placed** | **15.21 × 19.80 cm** | — |
+
+0.26 mm short on width, exact on depth. The card mask underneath is a few percent larger and the
+same sand colour, so that hairline is covered. Should a future card have a different aspect ratio,
+`min` keeps the floor inside its edges instead of hanging over the table.
+
+Only `Seafloor_Sand*` is measured, not the whole model — the pebbles and weeds scatter past the
+sand's edge, so sizing by the full `visualBounds` would leave the sand itself *smaller* than the
+card. It is matched by **prefix**, because the asset has already been re-authored once and renamed
+that prim from `Seafloor_Sand` to `Seafloor_Sand_m` along the way.
+
+### Models are planted in it, not balanced on it
+
+This is the part that fixes "the model looks like it is flying", and it is a single sign.
+
+`fit(_:named:)` stands every model with its base at y = 0. The floor is placed by its **top**, and
+`seafloorEmbed` puts that top *above* y = 0 rather than below it — so the model's base is sunk a
+little into the sand instead of resting on it.
+
+That has to be positive, and roughly the sand's own undulation. The sand is a sculpted surface, not
+a flat one: 4.60 mm of variation once scaled to a 6-inch card. A model whose base sat exactly at the
+sand's bounding-box *top* would touch only the highest dune and visibly hover over everything lower,
+which is precisely how the earlier version — which pushed the floor 3 mm *down* — went wrong.
+`seafloorEmbed` of 4 mm puts the base near the average surface, and contact reads as solid from
+every angle.
+
+### The model has to fit its floor
+
+The floor is the card's size, so a model much wider than the card cannot look attached to it however
+carefully it is seated. `Showcase_Coral` was sized to 0.3 m against a 15.2 cm floor — very nearly
+twice its width — and was brought down to 0.13 m when the floor came back. Anything up to about 0.14
+stays inside.
+
+A card whose model ships its own ground is exempt, because it gets no shared floor at all.
+
+### A model with its own ground gets none
+
+`seafloor(under:sizedTo:report:)` returns `nil` if the card's own model already contains an entity
+named `Seafloor*` — the same declare-by-naming idiom as the rest of the content API.
+`Showcase_Biorock.usdz` ships 115 `Seafloor_*` prims of its own; stacking a second floor under them
+only z-fights.
+
+### Weight
+
+71 mesh prims and 6 baked textures, the largest a 2048² `Bake_Sand.png`. Clones share
+`MeshResource` and materials, so the texture memory is paid **once** however many cards use it — but
+draw calls are per instance, so N cards showing it at once is 71 × N. That is the number to watch if
+the frame rate drops, not the file size.
+
+## Hiding the card under the model
+
+The printed card is not meant to be looked at once it has been found. Every card gets a flat quad
+laid over it at its own printed size, in sand colour, so the artwork disappears the instant
+tracking starts and reads as ground the model is standing on.
+
+```
+pivot
+  ├── <card name>.usdz     ← the model, sized by fit(_:named:) to modelWidths
+  └── mask                 ← a generated quad, sized to the card itself
+```
+
+It is generated in `Coordinator.mask(for:)`, not authored: it is exactly the card's rectangle in
+one colour, so there is nothing for a `.usdz` to contribute and nothing to keep in step per card.
+Adding a card still means two files.
+
+### The colour is sampled from the seafloor sitting on it
+
+`cardMaskColor` is not picked by eye. It is averaged from `Seafloor.usdz`'s own `Bake_Sand.png` —
+the floor that now covers the card — so the hairline of mask showing past the floor's contain fit is
+the same colour as the floor.
+
+**Sample the sand only.** That PNG is a UV bake and 46% of it is black padding, so a naive average
+comes out a muddy dark olive. Over the real pixels the mean (`#A99D88`) and the per-channel median
+(`#A89D88`) agree to a single unit.
+
+Same method works for any future asset: find the mesh's `material:binding`, follow `diffuseColor` to
+its `UsdUVTexture`, check nothing tints it, then average that file ignoring the padding.
+
+### Three details worth keeping if it is reworked
+
+| Detail | Why |
+|---|---|
+| `generatePlane(width:depth:)`, never `(width:height:)` | the first builds the plane in XZ, the second in XY. The anchor's axes follow the card — x across its printed width, z down its printed height, y out of its surface — so XZ *is* the card's plane and the mask needs no rotation of its own. |
+| `PhysicallyBasedMaterial` at `roughness` 0.95, `metallic` 0 | copied from `Seafloor_SandMat`'s own `UsdPreviewSurface`. The mask has to take the room's light the way the models' sand does, or the two disagree where they meet — an unlit quad renders at exactly its authored value and drifts, too bright in a dim room and too flat in a bright one. Near-matte and non-metallic is what buys that without a specular highlight streaking across a plane this large. |
+| `cardMaskBleed`, above 1.0 | a reference image is rarely cropped to the exact millimetre of the print, and the pose filter is always a hair behind the card, so an exact-size mask leaves a sliver of printed edge showing on one side. A few percent of overhang is what makes the cover look deliberate. |
+
+`cardMaskDrop` sits it a millimetre under the card plane, because models are fitted base-at-y = 0
+and one with a flat bottom face would otherwise z-fight against the mask.
+
+It hangs off the pivot beside the model, so it appears, hides and locks with that card like
+everything else on it, and it is ordinary geometry — people occlusion still draws hands in front
+of it. All four constants are at the top of `PostcardARView.swift`.
+
 ## What else is in your .usdz
 
 A `.usdz` is a scene, not a mesh. Exporting from Blender takes everything in the scene with it —
@@ -118,8 +242,9 @@ The passthrough video stops following the device and the app looks completely fr
 error, nothing in the console, and it happens the moment the model is added to the scene — so it
 looks like a hang in whatever code ran last, not like an asset problem.
 
-`removeCameras(from:)` strips them at load time, so this is handled for any model you drop in.
-Do not remove that call. Lights import as inert entities and are harmless.
+`ModelLibrary.removeCameras(from:)` strips them at load time, so this is handled for any model you
+drop in — `Showcase_Biorock.usdz` ships one. Do not remove that call. Lights import as inert
+entities and are harmless; see below for why they also do nothing.
 
 To see what an asset actually contains, dump the prim types:
 
@@ -135,6 +260,81 @@ or select only the mesh and export selection.
 Diagnose an imported asset by walking the loaded entity tree and printing components, rather than
 by reading the file size — the shipped coral is 9 MB and froze the camera, while a 52 MB model
 did not.
+
+### Your Blender lights do not come with it
+
+They are *in* the file — every model here exports one (`DomeLight "env_light"`, `SphereLight
+"Light"`, and `Simulation_Drupella.usdz` also carries a `DistantLight "Sun"` and three
+`RectLight`s). RealityKit imports them as inert entities and lights nothing with them. There is no
+setting that turns them on, and this is not a bug to work around.
+
+It is also the right behaviour for AR. In `ARView(cameraMode: .ar)` the scene is lit by ARKit's
+automatic environment probe — the actual room the card is sitting in — so a model looks like it
+belongs on the table rather than like it is lit from a Blender scene that is not there.
+
+Three ways to get the look back, in the order worth trying:
+
+| Approach | When |
+|---|---|
+| **Bake the lighting into the textures** | almost always. It is what most of these assets already do — `BakedBaseColor`, `BakedCoral_*`, `Bake_Sand` — and it costs nothing at runtime. A model that reads flat next to a baked one has simply not been baked. |
+| Add real lights in code | for a key or rim light that has to follow the model. `DirectionalLightComponent`, `PointLightComponent` and `SpotLightComponent` are all available from iOS 13, and take `intensity` in lux. Attach one to the pivot, not to the model, so it survives cloning. |
+| Supply a custom environment | `arView.environment.lighting.resource = try EnvironmentResource(…)` replaces the camera probe with your own IBL, and `intensityExponent` scales it. Fights the AR illusion — the model stops matching the room — so it is a last resort. |
+
+### Animation has to be exported *and* played
+
+Two separate things go wrong, and the first is the one that usually bites.
+
+**1. Check the animation is actually in the file.** Blender's USD exporter only writes animation
+when the export options ask for it, and it bakes transform and skeletal animation over the scene
+frame range. It does **not** carry modifier-driven motion (unless baked first), shader/material
+animation, or geometry-node effects. If your effect is a moving material, USD will not bring it —
+rebuild it in Reality Composer Pro.
+
+Grep for it before theorising about the code:
+
+```sh
+usdcat --flatten *.usdc | grep -ciE 'timeSamples|SkelAnimation|skel:|UsdSkel'
+```
+
+A count of `0` means there is no animation in the asset, whatever Blender's viewport does. Every
+`.usdz` currently in this project returns `0`, `Showcase_Biorock.usdz` included — its
+`PreviewFish_*` and `PrevBubble_*` entities are static geometry.
+
+Worth checking the stage metadata too, since Blender writes these *only* when it exports animation:
+
+```sh
+usdcat --flatten *.usdc | grep -cE 'startTimeCode|endTimeCode|timeCodesPerSecond'
+```
+
+`0` there is the clearest single sign that the exporter was not asked for animation at all.
+
+**2. RealityKit does not auto-play what it imports.** It loads clips into
+`Entity.availableAnimations` and leaves them *stopped*. An asset that animates perfectly in Blender
+or Quick Look therefore stands still in the app until something starts it.
+
+`Coordinator.play(in:)` does that at load, looping forever:
+
+```swift
+for animation in entity.availableAnimations {
+    entity.playAnimation(animation.repeat(duration: .infinity),
+                         transitionDuration: 0, startsPaused: false)
+}
+for child in entity.children { play(in: child) }
+```
+
+Two details in there are load-bearing:
+
+- **It walks the whole tree**, not just the root. RealityKit hangs an `AnimationLibraryComponent` on
+  whichever entity the clip actually targets, which for a Blender export is usually the animated
+  object rather than the scene root — checking only the root finds nothing and looks exactly like a
+  missing animation.
+- **It runs once at load, not on each detection.** The clips loop forever, so a card coming into
+  view shows one already running rather than snapping back to frame zero. Models are clones
+  (`ModelLibrary.model(named:)`) and cloning copies components, so each card animates independently
+  and the library's pristine copy is untouched.
+
+It is safe on every card: a model with no animations has an empty `availableAnimations` and nothing
+happens.
 
 ## Weight
 
@@ -176,4 +376,6 @@ not a hang.
   handles timeline animations, shader graph materials, particles, and spatial audio.
 - The old Reality Composer app and its `.rcproject` format are gone from Xcode 26. Ignore
   tutorials that use it.
-- Skeletal and transform animations in USDZ import fine. Blend shapes are unreliable.
+- Skeletal and transform animations in USDZ import fine, *if* the exporter was asked for them and
+  something calls `playAnimation` — see "Animation has to be exported *and* played" above. Blend
+  shapes are unreliable.
