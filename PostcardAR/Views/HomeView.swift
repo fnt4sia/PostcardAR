@@ -42,10 +42,13 @@ struct HomeView: View {
     private var content: some View {
         VStack(spacing: 20) {
             VStack(spacing: 8) {
-                Text("SCI.\nMULATE")
+                Text("CORALIZE")
                     .font(.custom("JetBrainsMono-Bold", size: 52.788))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(DesignTokens.blackText)
+                    // Wider than `content`'s 239.304pt frame (sized for the subtitle/button, not
+                    // this headline) — without this "CORALIZE" wraps after the "z".
+                    .fixedSize()
                 Text("Welcome, scientists!\nGet your cards ready.")
                     .font(.custom("JetBrainsMono-Regular", size: 18))
                     .multilineTextAlignment(.center)

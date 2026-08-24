@@ -107,6 +107,12 @@ final class ARStatus {
     /// failure to lock can be told apart from a failure to see the hand.
     var handInFrame = false
 
+    /// Whether a showcase card carrying `ANNO*` labels is on screen right now — the signal
+    /// `ContentView` uses to show "TAP TO VIEW INFORMATION". Showcase-only and annotation-only:
+    /// a plain showcase card has nothing to tap, and a simulation card already has its own hint
+    /// bar for its gesture. See `Coordinator.onRenderFrame()`.
+    var annotatedShowcaseVisible = false
+
     /// Whether a hand is in frame that Vision cannot read a pinch from — see
     /// `PinchInteraction.handTooClose`. Drawn during `playing` only, by `ContentView`.
     var handTooClose = false
@@ -212,6 +218,12 @@ extension PostcardARView {
             /// on re-detection instead of read back off `pivot`, and left untouched on tracking
             /// loss so the next pose glides in like any other movement, rather than snapping.
             var heldPose: Transform?
+
+            /// Whether this card's model got any labels built by `AnnotationLayer.collect(from:
+            /// in:named:report:)` — set once in `attachModels()`. Read in `onRenderFrame()` to
+            /// decide `ARStatus.annotatedShowcaseVisible`, so a showcase card worth tapping can
+            /// tell the player so.
+            var hasAnnotations = false
         }
 
         private let status: ARStatus
@@ -409,10 +421,17 @@ extension PostcardARView {
             // is under way — and whether the card the current run belongs to is on screen at all.
             var trackedSimulation: String?
             var activeCardPresent = false
+            var annotatedShowcaseVisible = false
 
             for index in cards.indices {
                 let tracked = cards[index].anchor.isAnchored
                 let isSimulation = cards[index].kind == .simulation
+
+                // Showcase-only: a showcase card is only ever on screen while tracked (it has no
+                // occlusion lock, see `visible` below), so `tracked` alone is "on screen" for it.
+                if tracked, !isSimulation, cards[index].hasAnnotations {
+                    annotatedShowcaseVisible = true
+                }
 
                 // `pivot.isEnabled` is the lock itself. Only a tracked frame can turn it on, so a
                 // card that has never been seen stays dark no matter what the hand does — which
@@ -466,6 +485,9 @@ extension PostcardARView {
             }
             if status.handInFrame != handInFrame {
                 status.handInFrame = handInFrame
+            }
+            if status.annotatedShowcaseVisible != annotatedShowcaseVisible {
+                status.annotatedShowcaseVisible = annotatedShowcaseVisible
             }
             let handTooClose = pinch.handTooClose
             if status.handTooClose != handTooClose {
@@ -574,13 +596,15 @@ extension PostcardARView {
         /// failed to load has no model and is simply skipped — the reason is already in
         /// `library.errors`, reported by `start(in:)`.
         private func attachModels() {
-            for card in cards {
+            for index in cards.indices {
+                let card = cards[index]
                 guard let model = library.model(named: card.name) else { continue }
                 card.pivot.addChild(model)
                 // Any card's model may carry `ANNO*` entities; nothing about this turns on the
                 // card's kind, so both kinds are offered to it. The pivot rather than the model is
                 // handed over as the container — see `AnnotationLayer.collect(from:in:named:report:)`.
-                annotations.collect(from: model, in: card.pivot, named: card.name, report: report)
+                cards[index].hasAnnotations =
+                    annotations.collect(from: model, in: card.pivot, named: card.name, report: report)
                 // Showcase models are looked at, not touched, so nothing in one ever enters the
                 // grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to find on one.
                 // Which minigame a simulation card runs is read from the model's own contents, not

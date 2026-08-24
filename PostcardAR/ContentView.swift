@@ -26,8 +26,10 @@ struct ContentView: View {
             })
 
             // A plain conditional instead of `.fullScreenCover`: a cover's dismissal is a fixed
-            // system slide, not something SwiftUI lets you restyle. This crossfades instead, like
-            // every other panel in the app (`dimmed()`, the phase-to-phase run UI).
+            // system slide, not something SwiftUI lets you restyle. Crossfades in; on the way out
+            // it also recedes slightly, the same `.scale.combined(with: .opacity)` the `.finished`
+            // result card itself already uses — so leaving reads as the same kind of motion as
+            // arriving there did, not a mirror-image slide.
             if isScanning {
                 Group {
                     if library.isReady {
@@ -36,7 +38,10 @@ struct ContentView: View {
                         LoadingView(loaded: library.loaded, total: library.total)
                     }
                 }
-                .transition(.opacity)
+                .transition(.asymmetric(
+                    insertion: .opacity,
+                    removal: .scale(scale: 0.92).combined(with: .opacity)
+                ))
             }
         }
         .animation(.easeInOut(duration: 0.25), value: isScanning)
@@ -83,6 +88,16 @@ private struct ScannerScreen: View {
                 }
             }
             .overlay { runOverlay }
+            // A showcase card's own hint, for tapping its labels open. Gated on `.idle`: a
+            // simulation card already owns the bottom of the screen the moment a run starts
+            // (its own `PlayingHintBar`, the HUD, the result card), and two cards can be in
+            // frame together — this only speaks while nothing else is.
+            .overlay(alignment: .bottom) {
+                if status.annotatedShowcaseVisible, game.phase == .idle {
+                    PlayingHintBar(text: "TAP TO VIEW INFORMATION")
+                        .padding(.bottom, 37)
+                }
+            }
             // Phase-keyed haptics, independent of the per-second ones below: a "get ready" tap
             // right at countdown kickoff (before 3 even shows — the text-keyed haptic only fires
             // on a *change*, so a countdownText already "3" from its default would otherwise skip
@@ -140,7 +155,7 @@ private struct ScannerScreen: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .overlay(alignment: .bottom) {
-                PlayingHintBar(text: "PINCH & HOLD TO REMOVE")
+                PlayingHintBar(text: game.minigame.settings.hint)
                     .padding(.bottom, 37)
             }
             .animation(.easeInOut(duration: 0.2), value: status.handTooClose)
