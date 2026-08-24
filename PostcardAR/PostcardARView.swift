@@ -111,6 +111,16 @@ final class ARStatus {
     /// `PinchInteraction.handTooClose`. Drawn during `playing` only, by `ContentView`.
     var handTooClose = false
 
+    /// The card name last decoded from a QR in the camera frame, and the fraction of recent
+    /// Vision samples that decoded anything at all.
+    ///
+    /// Measurement only — nothing in the app acts on either yet. They are on the panel to answer
+    /// the one question that decides whether card identity can move off the reference images and
+    /// onto a printed QR: not "is the name right" (a QR is checksummed, so it is) but "how often
+    /// does a name arrive at the distance a card is actually held". See `QRCardIdentity`.
+    var qrPayload: String?
+    var qrDecodeRate: Double = 0
+
     /// How many `.usdz` files have finished loading, out of one per reference image.
     var loadedModels = 0
     var totalImages = 0
@@ -461,6 +471,16 @@ extension PostcardARView {
             let handTooClose = pinch.handTooClose
             if status.handTooClose != handTooClose {
                 status.handTooClose = handTooClose
+            }
+            let qrPayload = pinch.qrPayload
+            if status.qrPayload != qrPayload {
+                status.qrPayload = qrPayload
+            }
+            // Changes at the sampler's 15 Hz, not the render loop's 60 — the guard drops three
+            // writes in four, same reason as every other field here.
+            let qrDecodeRate = pinch.qrDecodeRate
+            if status.qrDecodeRate != qrDecodeRate {
+                status.qrDecodeRate = qrDecodeRate
             }
 
             updateGame(cardPresent: activeCardPresent, candidate: trackedSimulation)

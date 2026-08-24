@@ -208,6 +208,14 @@ private struct ScannerScreen: View {
                   systemImage: status.handInFrame ? "hand.raised.fill" : "hand.raised.slash")
                 .foregroundStyle(status.handInFrame ? Color.green : .white.opacity(0.6))
 
+            // The QR experiment's readout. The percentage is the point, not the name: a name
+            // that flickers in at 20% cannot carry card identity however correct it is while it
+            // is there. See `QRCardIdentity`.
+            Label(status.qrPayload.map { "QR: \($0) · \(Int(status.qrDecodeRate * 100))%" }
+                    ?? "No QR",
+                  systemImage: status.qrPayload == nil ? "qrcode.viewfinder" : "qrcode")
+                .foregroundStyle(status.qrPayload == nil ? .white.opacity(0.6) : Color.green)
+
             line(status.totalImages > 0 && status.loadedModels == status.totalImages,
                  done: "Models loaded (\(status.loadedModels))",
                  waiting: "Loading models (\(status.loadedModels)/\(status.totalImages))…",

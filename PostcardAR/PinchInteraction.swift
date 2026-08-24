@@ -346,6 +346,10 @@ final class PinchInteraction {
         return request
     }()
 
+    /// The card name read off a QR in the same sample as the hand pose. Reported only, for now
+    /// — see `QRCardIdentity`.
+    private var qr = QRCardIdentity()
+
     /// Guards against overlapping inference and paces sampling to `handPoseSampleInterval`.
     private var handPoseTaskInFlight = false
     private var lastHandPoseSampleTime = Date.distantPast
@@ -414,6 +418,14 @@ final class PinchInteraction {
     /// Written once per sample rather than derived from timestamps, so "no hand" is answered by
     /// the absence of a hand in *this* sample instead of by a clock that has not run out yet.
     private(set) var handTooClose = false
+
+    /// The card name last read off a QR in the camera frame, and how often one is coming through.
+    ///
+    /// Read by the coordinator into `ARStatus` and shown on the status panel; nothing acts on it
+    /// yet. Surfaced through here because this class owns the sampler the read shares — see
+    /// `QRCardIdentity` for what the experiment is measuring.
+    var qrPayload: String? { qr.payload }
+    var qrDecodeRate: Double { qr.decodeRate }
 
     /// Consecutive samples that read as too close — see `handTooCloseConfirmSamples`.
     private var tooCloseStreak = 0
@@ -757,7 +769,18 @@ final class PinchInteraction {
             // Explicit orientation hint: Vision rotates internally and hands back joints
             // already in the upright image's coordinate space, which the aspect-fill math
             // below expects.
-            let hand = try? await handPoseRequest.perform(on: pixelBuffer, orientation: imageOrientation).first
+            //
+            // Both requests go through one `ImageRequestHandler` rather than one
+            // `perform(on:)` each: the handler ingests the pixel buffer once and runs both
+            // models against it, so reading the QR costs no second in-flight task and does not
+            // halve the hand-pose rate that `handPoseLossTimeout` and the occlusion lock are
+            // tuned against. Adding a second sampler alongside this one would do both.
+            let handler = ImageRequestHandler(pixelBuffer, orientation: imageOrientation)
+            let results = try? await handler.perform(handPoseRequest, QRCardIdentity.request)
+            let hand = results?.0.first
+            // Noted every sample, including the ones that read nothing — `decodeRate` is a
+            // fraction of samples taken, so skipping the misses would peg it at 100%.
+            qr.note(results?.1 ?? [])
 
             // Presence is a far looser question than pinching, and has to be asked first. A
             // hand held flat over a card — the case the occlusion lock exists for — is
