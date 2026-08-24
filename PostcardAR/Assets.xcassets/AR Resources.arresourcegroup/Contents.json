@@ -5,16 +5,7 @@
   },
   "resources" : [
     {
-      "filename" : "ref-biorock-reef.arreferenceimage"
-    },
-    {
-      "filename" : "ref-drupella-cornus.arreferenceimage"
-    },
-    {
-      "filename" : "Showcase_Biorock.arreferenceimage"
-    },
-    {
-      "filename" : "Showcase_Coral.arreferenceimage"
+      "filename" : "borderSimDrupella-5.arreferenceimage"
     }
   ]
 }

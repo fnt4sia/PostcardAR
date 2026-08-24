@@ -429,16 +429,12 @@ final class PinchInteraction {
 
     /// The card name last read off a QR in the camera frame, and how often one is coming through.
     ///
-    /// Read by the coordinator into `ARStatus` and shown on the status panel; nothing acts on it
-    /// yet. Surfaced through here because this class owns the sampler the read shares — see
-    /// `QRCardIdentity` for what the experiment is measuring.
+    /// The payload is acted on — `Coordinator.rebind(to:)` binds the model it names to whichever
+    /// anchor is tracked, and it is half the latch that may turn a pivot on. The rate is reported
+    /// to the status panel and acted on by nothing. Surfaced through here because this class owns
+    /// the sampler the read shares — see `QRCardIdentity`.
     var qrPayload: String? { qr.payload }
     var qrDecodeRate: Double { qr.decodeRate }
-
-    /// **Diagnostic, temporary.** Size of the last code that decoded, and of the frame it was
-    /// measured in — see `QRCardIdentity.pixelWidth`.
-    var qrPixelWidth: Double? { qr.pixelWidth.map(Double.init) }
-    var qrImageWidth: Double? { qr.imageWidth.map(Double.init) }
 
     /// Asks the session for one full-resolution frame and looks for a QR in it.
     ///
@@ -470,11 +466,9 @@ final class PinchInteraction {
         Task { @MainActor in
             defer { highResolutionTaskInFlight = false }
             guard let frame = try? await session.captureHighResolutionFrame() else { return }
-            let pixelBuffer = frame.capturedImage
-            let size = Self.uprightImageSize(of: pixelBuffer, orientation: imageOrientation)
             let observations = try? await QRCardIdentity.request
-                .perform(on: pixelBuffer, orientation: imageOrientation)
-            qr.noteHighResolution(observations ?? [], in: size)
+                .perform(on: frame.capturedImage, orientation: imageOrientation)
+            qr.noteHighResolution(observations ?? [])
         }
     }
 
@@ -831,7 +825,7 @@ final class PinchInteraction {
             let hand = results?.0.first
             // Noted every sample, including the ones that read nothing — `decodeRate` is a
             // fraction of samples taken, so skipping the misses would peg it at 100%.
-            qr.note(results?.1 ?? [], in: uprightImageSize)
+            qr.note(results?.1 ?? [])
 
             // Presence is a far looser question than pinching, and has to be asked first. A
             // hand held flat over a card — the case the occlusion lock exists for — is

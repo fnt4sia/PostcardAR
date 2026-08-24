@@ -216,19 +216,6 @@ private struct ScannerScreen: View {
                   systemImage: status.qrPayload == nil ? "qrcode.viewfinder" : "qrcode")
                 .foregroundStyle(status.qrPayload == nil ? .white.opacity(0.6) : Color.green)
 
-            // Diagnostic, temporary. Vision wants roughly 4–5 px per module and these codes are
-            // 25–29 modules, so ~145 px is the number to beat. Walk the card back until the rate
-            // collapses; the last size shown is the practical floor. Remove with the `ARStatus`
-            // fields it reads.
-            // The frame width shown is the one the decode was *measured* in, so it also says
-            // which pipeline read the code: the video stream's width, or the much larger still
-            // from `scanForQRAtHighResolution()`.
-            Label("\(status.qrPixelWidth.map { "QR \(Int($0))px" } ?? "QR —")"
-                  + "\(status.qrImageWidth.map { " in \(Int($0))" } ?? "")"
-                  + " · video \(status.cameraResolution)",
-                  systemImage: "ruler")
-                .foregroundStyle(.cyan)
-
             line(status.totalImages > 0 && status.loadedModels == status.totalImages,
                  done: "Models loaded (\(status.loadedModels))",
                  waiting: "Loading models (\(status.loadedModels)/\(status.totalImages))…",

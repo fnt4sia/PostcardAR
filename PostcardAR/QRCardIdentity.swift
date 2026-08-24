@@ -33,7 +33,6 @@
 //      `payloadHoldSamples`.
 //
 
-import CoreGraphics
 import Vision
 
 /// How many recent samples `decodeRate` averages over. Thirty at the sampler's 15 Hz is two
@@ -80,23 +79,11 @@ struct QRCardIdentity {
     /// motion blur it cannot, and no amount of wiring downstream will fix that.
     private(set) var decodeRate: Double = 0
 
-    /// **Diagnostic, temporary.** The longest edge of the last code that decoded, in pixels of
-    /// the captured frame, and the width of that frame.
-    ///
-    /// Here to answer the one question the decode rate cannot: *how big does the code have to be*.
-    /// Vision wants roughly four to five pixels per module and these codes are 25–29 modules, so
-    /// the number to beat is around 145 px. Only measurable on a sample that decoded — walk the
-    /// card away until the rate collapses and the last reading is the practical floor.
-    private(set) var pixelWidth: CGFloat?
-    private(set) var imageWidth: CGFloat?
-
     private var window: [Bool] = []
     private var missesSinceDecode = 0
 
-    /// Records one sample's worth of observations, decoded or empty. `imageSize` is the upright
-    /// frame the corner points are normalised against — needed only by the diagnostic above.
-    mutating func note(_ observations: [BarcodeObservation], in imageSize: CGSize) {
-        imageWidth = imageSize.width
+    /// Records one sample's worth of observations, decoded or empty.
+    mutating func note(_ observations: [BarcodeObservation]) {
         // First rather than best: `maximumHandCount`'s equivalent does not exist on this request,
         // and one card in frame is the case being measured. Two QRs in view is a step-two problem
         // — it needs the corner points to say which anchor each belongs to.
@@ -115,12 +102,6 @@ struct QRCardIdentity {
             window.removeFirst(window.count - decodeRateWindow)
         }
         decodeRate = window.isEmpty ? 0 : Double(window.count(where: { $0 })) / Double(window.count)
-
-        // Diagnostic. Measured off the corner points rather than the bounding box, so a code held
-        // at an angle reports its own edge instead of the axis-aligned box around it. Held after
-        // the last decode for the same reason `payload` is — the reading matters most at the
-        // distance where decoding has just started to fail.
-        if let observation { measure(observation, in: imageSize) }
     }
 
     /// Records a decode from a one-off high-resolution capture.
@@ -132,23 +113,10 @@ struct QRCardIdentity {
     ///
     /// Misses are not fed here at all: a high-resolution scan that found nothing says only that
     /// the card was not pointed at a code yet, and the video stream is already counting that.
-    mutating func noteHighResolution(_ observations: [BarcodeObservation], in imageSize: CGSize) {
-        guard let observation = observations.first(where: { $0.payloadString != nil }),
-              let decoded = observation.payloadString
+    mutating func noteHighResolution(_ observations: [BarcodeObservation]) {
+        guard let decoded = observations.first(where: { $0.payloadString != nil })?.payloadString
         else { return }
         payload = decoded
         missesSinceDecode = 0
-        imageWidth = imageSize.width
-        measure(observation, in: imageSize)
-    }
-
-    /// The code's longest edge in pixels, from its corner points rather than its bounding box —
-    /// so a code held at an angle reports its own edge, not the axis-aligned box around it.
-    private mutating func measure(_ observation: BarcodeObservation, in imageSize: CGSize) {
-        let topLeft = observation.topLeft.toImageCoordinates(imageSize, origin: .upperLeft)
-        let topRight = observation.topRight.toImageCoordinates(imageSize, origin: .upperLeft)
-        let bottomLeft = observation.bottomLeft.toImageCoordinates(imageSize, origin: .upperLeft)
-        pixelWidth = max(hypot(topRight.x - topLeft.x, topRight.y - topLeft.y),
-                         hypot(bottomLeft.x - topLeft.x, bottomLeft.y - topLeft.y))
     }
 }
