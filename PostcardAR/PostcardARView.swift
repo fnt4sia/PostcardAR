@@ -190,16 +190,19 @@ extension PostcardARView {
             case simulation
         }
 
-        private struct Card {
-            /// The image's name in the asset catalog, which is also its `.usdz`'s name.
+        /// One reference image: somewhere to stand a model, and the printed size to cut its mask
+        /// and floor to. **Pose only** — nothing here says which model that is. Two reference
+        /// images that a feature matcher confuses are therefore harmless: whichever one ARKit
+        /// decides it matched, the anchor still lands on the card in front of the lens.
+        private struct CardAnchor {
+            /// The image's name in the asset catalog. Reported to the status panel, and read for
+            /// nothing else — in particular it is no longer a model's name.
             let name: String
 
-            /// Showcase or simulation, decided by `name`'s prefix at build time of the array.
-            let kind: CardKind
-
             /// The printed card's real-world size, straight off `ARReferenceImage.physicalSize`.
-            /// Read for one thing only: sizing this card's mask to cover it. The card's *model*
-            /// is deliberately not sized from it — see `modelWidths` in `ModelLibrary`.
+            /// Read for two things only: sizing the mask that covers this card, and the shared
+            /// seafloor laid on it. A model's own size is deliberately not derived from it — see
+            /// `modelWidths` in `ModelLibrary`.
             let size: CGSize
 
             /// ARKit's. Its transform is the card's raw pose, re-solved from scratch every frame.
@@ -210,13 +213,28 @@ extension PostcardARView {
             /// "own" the transform does not escape this — `world` is a target like any other,
             /// and the model ends up pinned at the origin, which on screen reads as a freeze.
             let anchor: AnchorEntity
+        }
+
+        /// One model, and the branch it is drawn on. **Identity only** — a card knows what it is
+        /// and nothing about where it is, until a QR payload binds it to a `CardAnchor`.
+        private struct Card {
+            /// The model's name, which is its `.usdz`'s name and the string printed in the QR.
+            let name: String
+
+            /// Showcase or simulation, decided by `name`'s prefix at build time of the array.
+            let kind: CardKind
 
             /// Ours. A plain `Entity` has no anchoring component, so what we write to it stays.
-            /// Parented to the shared `worldRoot`, not to `anchor` — which also means RealityKit
+            /// Parented to the shared `worldRoot`, not to an anchor — which also means RealityKit
             /// never hides it for us, so `isEnabled` is driven by hand in `onRenderFrame()`, and
             /// doubles as the occlusion lock's state. Starts off: a pivot nobody has posed yet
             /// sits at the world origin.
             let pivot: Entity
+
+            /// Whether `attach(_:size:)` has hung the model, mask and floor on `pivot` yet. False
+            /// until a QR first names this model, because the size those are cut to belongs to
+            /// whichever card turns out to be carrying it.
+            var attached = false
 
             /// Where this card's model is currently being held, in world space. Compared against
             /// on re-detection instead of read back off `pivot`, and left untouched on tracking
@@ -235,8 +253,20 @@ extension PostcardARView {
         /// until the run is wiped, so a second simulation card entering frame is only a model.
         private var activeSimulationCard: String?
 
-        /// One per reference image, built in `start(in:)` and never added to afterwards.
+        /// One per reference image, built in `start(in:)` and never added to afterwards. Where a
+        /// card might be; never which one it is.
+        private var anchors: [CardAnchor] = []
+
+        /// One per model in the bundle, built in `start(in:)` and never added to afterwards. What
+        /// a card could be; never where it is.
         private var cards: [Card] = []
+
+        /// The model a QR has named and the anchor it is riding, joining the two arrays above.
+        ///
+        /// One at a time: the reader reports a single payload, so telling two QRs apart — and
+        /// saying which anchor each belongs to — is not something this can do yet. See
+        /// `rebind(to:)` for why the binding deliberately outlives the payload that made it.
+        private var bound: (card: Int, anchor: Int)?
 
         /// Dropping this cancels the render-loop subscription, so it has to be held.
         private var frameSubscription: (any Cancellable)?
@@ -329,33 +359,37 @@ extension PostcardARView {
             //
             // Already sorted by name, by the library — only so the status list does not reshuffle.
             for image in referenceImages {
-                // An unnamed entry cannot be anchored to or matched to a `.usdz`. Xcode names
-                // them from the filename, so this is close to unreachable.
+                // An unnamed entry cannot be anchored to. Xcode names them from the filename, so
+                // this is close to unreachable.
                 guard let name = image.name else { continue }
-
                 let anchor = AnchorEntity(.image(group: arResourceGroupName, name: name))
+                arView.scene.addAnchor(anchor)
+                anchors.append(CardAnchor(name: name, size: image.physicalSize, anchor: anchor))
+            }
+
+            // Then a branch per *model*, since that is what a QR payload names. Nothing is hung
+            // on one here — see `attach(_:size:)` for what waits and why.
+            for name in library.modelNames {
                 let pivot = Entity()
-                // Off until this card is actually tracked. A pivot hangs off the static
-                // `worldRoot`, not off its own image anchor, so nothing hides it for us: left
-                // enabled it would draw its model at the world origin — the spot the session
-                // started at — from the moment the `.usdz` loads, which on camera looks like
-                // some other card's model standing on the card you are pointing at.
+                // Off until a QR names this model *and* an anchor is tracked. A pivot hangs off
+                // the static `worldRoot`, not off an image anchor, so nothing hides it for us:
+                // left enabled it would draw its model at the world origin — the spot the session
+                // started at — from the moment the `.usdz` loads, which on camera looks like some
+                // other card's model standing on the card you are pointing at.
                 pivot.isEnabled = false
                 worldRoot.addChild(pivot)
-                arView.scene.addAnchor(anchor)
-
                 cards.append(Card(
                     name: name,
                     kind: name.hasPrefix(simulationCardPrefix) ? .simulation : .showcase,
-                    size: image.physicalSize,
-                    anchor: anchor,
                     pivot: pivot
                 ))
             }
 
-            status.totalImages = cards.count
+            // The library decoded every model at launch; hanging one on a pivot happens later and
+            // is only a clone, so these report what is in memory rather than what is on screen.
+            status.loadedModels = library.loaded
+            status.totalImages = library.total
             subscribeToRenderLoop(of: arView)
-            attachModels()
         }
 
         func session(_ session: ARSession, didFailWithError error: any Error) {
@@ -420,41 +454,61 @@ extension PostcardARView {
             var trackedSimulation: String?
             var activeCardPresent = false
 
+            // Where, and what — asked separately, which is the whole point of the split. ARKit
+            // says an anchor is on camera; the QR says which model is printed on it. `detected`
+            // lists reference images, not models: it is live tracking state, and under this
+            // split a tracked image no longer implies anything is drawn on it.
+            var trackedAnchor: Int?
+            for index in anchors.indices where anchors[index].anchor.isAnchored {
+                detected.append(anchors[index].name)
+                if trackedAnchor == nil { trackedAnchor = index }
+            }
+            rebind(to: trackedAnchor)
+
             for index in cards.indices {
-                let tracked = cards[index].anchor.isAnchored
+                // Every model but the bound one stays dark. An unbound pivot has never been posed
+                // and sits at the world origin — the phone's position at session start — so
+                // leaving one enabled piles every model in the bundle up on that spot.
+                guard bound?.card == index, let anchorIndex = bound?.anchor else {
+                    if cards[index].pivot.isEnabled { cards[index].pivot.isEnabled = false }
+                    continue
+                }
+
+                let tracked = anchors[anchorIndex].anchor.isAnchored
                 let isSimulation = cards[index].kind == .simulation
 
-                // `pivot.isEnabled` is the lock itself. Only a tracked frame can turn it on, so a
-                // card that has never been seen stays dark no matter what the hand does — which
-                // is what keeps every other card's model out of the frame, since all of them load
-                // at launch and an unposed pivot sits at the world origin. Once on, it stays on
-                // while the card is tracked *or* a hand is in frame, and goes off the moment
-                // both are gone.
+                // `pivot.isEnabled` is the lock itself, and the QR is now part of its latch: only
+                // a frame that both tracks the anchor *and* still has a payload may turn a pivot
+                // on. Once on, tracking alone keeps it, and a hand in frame holds it through the
+                // tracking loss that reaching into the scene causes.
                 //
-                // Simulation cards only. The lock exists so that reaching into the scene does not
-                // delete the thing you are reaching for; a showcase card has nothing to reach for,
-                // so it hides the moment its card leaves and never lingers under a passing hand.
-                let visible = tracked || (cards[index].pivot.isEnabled && handInFrame && isSimulation)
+                // That hand covers the QR as surely as it covers the card, which is exactly why
+                // `bound` is not re-derived from the payload each frame — see `rebind(to:)`.
+                //
+                // Simulation cards only, for the lock half. The lock exists so that reaching into
+                // the scene does not delete the thing you are reaching for; a showcase card has
+                // nothing to reach for, so it hides the moment its card leaves.
+                let visible = (tracked && pinch.qrPayload != nil)
+                    || (cards[index].pivot.isEnabled && (tracked || (handInFrame && isSimulation)))
                 if cards[index].pivot.isEnabled != visible {
                     cards[index].pivot.isEnabled = visible
                 }
 
                 if isSimulation {
-                    if tracked, trackedSimulation == nil { trackedSimulation = cards[index].name }
+                    if tracked { trackedSimulation = cards[index].name }
                     // Present, not tracked: a locked card is still a card you can play on, which
                     // is the entire point of the lock. This is what keeps a run alive under a hand.
                     if cards[index].name == activeSimulationCard { activeCardPresent = visible }
                 }
 
-                // Untracked cards keep `heldPose` — locked or hidden, the model holds its last
+                // An untracked card keeps `heldPose` — locked or hidden, the model holds its last
                 // pose, so a card that comes back glides on from where it was instead of snapping.
                 guard tracked else {
                     if visible { locked.append(cards[index].name) }
                     continue
                 }
 
-                detected.append(cards[index].name)
-                hold(&cards[index])
+                hold(&cards[index], on: anchors[anchorIndex].anchor)
             }
 
             // Guarded: Observation notifies on every set without comparing values, and an
@@ -534,10 +588,11 @@ extension PostcardARView {
         /// movement: those re-write the previous pose. Returning early instead would leave the
         /// pivot keeping its old *local* transform, and its world pose would go on inheriting
         /// the anchor's jitter — the noise would pass straight through.
-        private func hold(_ card: inout Card) {
+        private func hold(_ card: inout Card, on anchor: AnchorEntity) {
             // The anchor's world transform *is* the card's raw pose; RealityKit has already
-            // copied it there, so there is nothing to ask ARKit for.
-            let target = card.anchor.transformMatrix(relativeTo: nil)
+            // copied it there, so there is nothing to ask ARKit for. Which anchor that is comes
+            // from the binding rather than from the card, since a model is not tied to an image.
+            let target = anchor.transformMatrix(relativeTo: nil)
             let targetPose = Transform(matrix: target)
 
             // Nothing held means this card has just appeared. Take its pose as given.
@@ -575,40 +630,79 @@ extension PostcardARView {
             2 * acos(min(abs(simd_dot(a.vector, b.vector)), 1))
         }
 
+        // MARK: Binding a QR payload to an anchor
+
+        /// Points the model a QR has named at the anchor ARKit is tracking, attaching that model
+        /// the first time it is needed.
+        ///
+        /// **A binding outlives the payload that made it.** The reader drops a name about a
+        /// second after it stops decoding, and the two things that stop it decoding are a hand
+        /// over the card and the card leaving frame — precisely the two the occlusion lock exists
+        /// to survive. Re-deriving `bound` from the payload every frame would therefore delete
+        /// the model at the exact moment the player reaches for it. So a *new* name rebinds and
+        /// the absence of one changes nothing; what the payload still gates is whether a pivot
+        /// may be switched **on**, which is the latch in `onRenderFrame()`.
+        ///
+        /// Swapping one card for another shows the outgoing model on the incoming card until the
+        /// new QR reads — bounded by how long the reader holds a stale name.
+        private func rebind(to anchorIndex: Int?) {
+            guard let anchorIndex, let payload = pinch.qrPayload else { return }
+
+            guard let cardIndex = cards.firstIndex(where: { $0.name == payload }) else {
+                // Decoded cleanly and matches no model: a QR printed with a typo, or one naming a
+                // `.usdz` that is not in the bundle. Worth saying, since the symptom is otherwise
+                // a card that tracks perfectly and stays empty.
+                report("QR says \"\(payload)\", but there is no \(payload).usdz.")
+                return
+            }
+
+            // A different model than the one on screen: put the old one away before the new one
+            // appears, or both are drawn at once on the same card.
+            if let previous = bound?.card, previous != cardIndex {
+                cards[previous].pivot.isEnabled = false
+            }
+            attach(&cards[cardIndex], size: anchors[anchorIndex].size)
+            bound = (card: cardIndex, anchor: anchorIndex)
+        }
+
         // MARK: Models
 
-        /// Hangs each card's model on its pivot, and offers it to the two things that read a
-        /// model's contents.
+        /// Hangs one card's model, mask and floor on its pivot the first time a QR names it, and
+        /// offers the model to the two things that read its contents. A no-op after that.
         ///
         /// Synchronous, and fast: `ModelLibrary` already did the decoding, the camera-stripping
-        /// and the scaling, so all that happens here is a clone per card. A card whose `.usdz`
-        /// failed to load has no model and is simply skipped — the reason is already in
-        /// `library.errors`, reported by `start(in:)`.
-        private func attachModels() {
-            for card in cards {
-                guard let model = library.model(named: card.name) else { continue }
-                card.pivot.addChild(model)
-                // Any card's model may carry `ANNO*` entities; nothing about this turns on the
-                // card's kind, so both kinds are offered to it. The pivot rather than the model is
-                // handed over as the container — see `AnnotationLayer.collect(from:in:named:report:)`.
-                annotations.collect(from: model, in: card.pivot, named: card.name, report: report)
-                // Showcase models are looked at, not touched, so nothing in one ever enters the
-                // grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to find on one.
-                // Which minigame a simulation card runs is read from the model's own contents, not
-                // from its name; see `Minigame.swift`.
-                if card.kind == .simulation {
-                    pinch.collect(from: model, named: card.name, report: report)
-                }
-                card.pivot.addChild(mask(for: card))
-                // A sibling of the model, never a child of it: `fit(_:named:)` has already sized the
-                // model against its own bounds, and burying the floor inside it would make every
-                // later measurement of that tree wrong. `nil` for a model that ships its own ground.
-                if let seafloor = library.seafloor(under: model, sizedTo: card.size, report: report) {
-                    card.pivot.addChild(seafloor)
-                }
-                play(in: model)
-                status.loadedModels += 1
+        /// and the scaling at launch, so all that happens here is a clone.
+        ///
+        /// **Late rather than at start-up, because of `size`.** The mask and the shared seafloor
+        /// are cut to the printed card, and which card a model is riding is not known until its
+        /// QR is read — that is the cost of letting a model outlive any one reference image.
+        private func attach(_ card: inout Card, size: CGSize) {
+            guard !card.attached else { return }
+            // Set before the load can fail: a missing `.usdz` must not be retried every frame.
+            // The reason is already in `library.errors`, reported by `start(in:)`.
+            card.attached = true
+
+            guard let model = library.model(named: card.name) else { return }
+            card.pivot.addChild(model)
+            // Any card's model may carry `ANNO*` entities; nothing about this turns on the
+            // card's kind, so both kinds are offered to it. The pivot rather than the model is
+            // handed over as the container — see `AnnotationLayer.collect(from:in:named:report:)`.
+            annotations.collect(from: model, in: card.pivot, named: card.name, report: report)
+            // Showcase models are looked at, not touched, so nothing in one ever enters the
+            // grabbable pool — `PinchInteraction.attemptGrab(at:)` has nothing to find on one.
+            // Which minigame a simulation card runs is read from the model's own contents, not
+            // from its name; see `Minigame.swift`.
+            if card.kind == .simulation {
+                pinch.collect(from: model, named: card.name, report: report)
             }
+            card.pivot.addChild(mask(sized: size))
+            // A sibling of the model, never a child of it: `fit(_:named:)` has already sized the
+            // model against its own bounds, and burying the floor inside it would make every
+            // later measurement of that tree wrong. `nil` for a model that ships its own ground.
+            if let seafloor = library.seafloor(under: model, sizedTo: size, report: report) {
+                card.pivot.addChild(seafloor)
+            }
+            play(in: model)
         }
 
         /// Starts every animation a model brought with it, looping forever.
@@ -644,10 +738,10 @@ extension PostcardARView {
         /// and the second in XY. The anchor's axes follow the card — x across its printed width,
         /// z down its printed height, y out of its surface — so XZ *is* the card's own plane, and
         /// the mask needs no rotation of its own.
-        private func mask(for card: Card) -> Entity {
+        private func mask(sized size: CGSize) -> Entity {
             let mesh = MeshResource.generatePlane(
-                width: Float(card.size.width) * cardMaskBleed,
-                depth: Float(card.size.height) * cardMaskBleed
+                width: Float(size.width) * cardMaskBleed,
+                depth: Float(size.height) * cardMaskBleed
             )
             // Lit, not unlit, and matched to `Seafloor_SandMat`: this is meant to read as ground
             // the models stand on, so it has to take the room's light the way their own sand does.

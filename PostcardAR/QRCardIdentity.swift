@@ -19,9 +19,18 @@
 //  feeds the same `name -> name.usdz` pairing the asset catalog already drives, so adding a card
 //  stays "drop two files, change no code" rather than growing a registry to keep in step.
 //
-//  This file is currently a *probe*: it decodes and reports, and nothing reads the answer except
-//  the status panel. Rewiring the model attachment onto it is the next step, and is deliberately
-//  not taken until the numbers below say a QR decodes reliably at the distance a card is held.
+//  `PostcardARView.Coordinator.rebind(to:)` acts on the payload; `decodeRate` is reported to the
+//  status panel and acted on by nothing, because it is the number that says whether this whole
+//  arrangement is viable — a name that arrives 30% of the time cannot carry card identity however
+//  correct it is while it is there.
+//
+//  Known limits, both from there being one payload and one binding:
+//
+//    * Two cards in frame at once bind to whichever reference image ARKit lists first, so the
+//      model can land on the wrong one. Fixing that means matching each payload's corner points
+//      against each anchor's projected position — `BarcodeObservation` carries the corners.
+//    * Swapping card A for card B draws A's model on B until B's QR reads, bounded by
+//      `payloadHoldSamples`.
 //
 
 import Vision
@@ -30,6 +39,17 @@ import Vision
 /// seconds — long enough to ride out a blurred frame or two, short enough that carrying the card
 /// out to arm's length shows up in the number while you are still holding it there.
 private let decodeRateWindow = 30
+
+/// How many samples a decoded name is held for after the last sample that read it. Fifteen is a
+/// second at 15 Hz — long enough that a blurred frame or a passing hand does not drop the name,
+/// short enough that swapping one card for another shows the outgoing model on the incoming card
+/// only briefly.
+///
+/// Shorter than `decodeRateWindow` on purpose, and the two must not be merged: the window is a
+/// statistic being reported, this is a piece of state the app acts on. Note that the *binding*
+/// in `PostcardARView` outlives this hold entirely — a hand over the card stops the decode long
+/// before it stops the game.
+private let payloadHoldSamples = 15
 
 /// One card name read off the camera, and how reliably it is coming through.
 ///
@@ -47,9 +67,9 @@ struct QRCardIdentity {
         return request
     }()
 
-    /// The last name decoded, held after the sample that read it — a card does not stop being
-    /// the card because one frame was blurred. Cleared only when a whole window goes by with
-    /// nothing at all, so a stale name cannot sit on screen after the card has gone.
+    /// The last name decoded, held for `payloadHoldSamples` after the sample that read it — a
+    /// card does not stop being the card because one frame was blurred — and cleared after that,
+    /// so a stale name cannot sit on screen once the card has gone.
     private(set) var payload: String?
 
     /// Fraction of the last `decodeRateWindow` samples that decoded anything, 0...1.
@@ -60,6 +80,7 @@ struct QRCardIdentity {
     private(set) var decodeRate: Double = 0
 
     private var window: [Bool] = []
+    private var missesSinceDecode = 0
 
     /// Records one sample's worth of observations, decoded or empty.
     mutating func note(_ observations: [BarcodeObservation]) {
@@ -67,17 +88,18 @@ struct QRCardIdentity {
         // and one card in frame is the case being measured. Two QRs in view is a step-two problem
         // — it needs the corner points to say which anchor each belongs to.
         let decoded = observations.compactMap(\.payloadString).first
-        if let decoded { payload = decoded }
+        if let decoded {
+            payload = decoded
+            missesSinceDecode = 0
+        } else {
+            missesSinceDecode += 1
+            if missesSinceDecode >= payloadHoldSamples { payload = nil }
+        }
 
         window.append(decoded != nil)
         if window.count > decodeRateWindow {
             window.removeFirst(window.count - decodeRateWindow)
         }
-
-        let hits = window.count(where: { $0 })
-        decodeRate = window.isEmpty ? 0 : Double(hits) / Double(window.count)
-
-        // A full window with nothing in it is the card being gone, not a dropped frame.
-        if window.count == decodeRateWindow, hits == 0 { payload = nil }
+        decodeRate = window.isEmpty ? 0 : Double(window.count(where: { $0 })) / Double(window.count)
     }
 }

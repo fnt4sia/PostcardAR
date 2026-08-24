@@ -107,6 +107,15 @@ final class ModelLibrary {
     /// Sorted by name, so the status list does not reshuffle between runs.
     @ObservationIgnored private(set) var referenceImages: [ARReferenceImage] = []
 
+    /// Every model in the bundle, by name — one `.usdz` each, `Seafloor` excluded since it is
+    /// ground rather than any card's model. Sorted, for the same reason as above.
+    ///
+    /// Scanned from the bundle rather than read off the reference images, which is the change a
+    /// QR-named model forces: a model no longer needs a same-named reference image to exist, and
+    /// a reference image no longer needs a same-named model. The two lists are now independent —
+    /// images say *where* a card is, payloads say *what* is printed on it.
+    @ObservationIgnored private(set) var modelNames: [String] = []
+
     /// The pristine model per card name — camera-stripped and scaled, never added to a scene.
     /// `model(named:)` hands out clones of these; see there for why.
     @ObservationIgnored private var models: [String: Entity] = [:]
@@ -128,7 +137,8 @@ final class ModelLibrary {
         defer { isLoading = false }
 
         referenceImages = await Self.loadReferenceImages()
-        total = referenceImages.count
+        modelNames = Self.bundledModelNames()
+        total = modelNames.count
 
         guard !referenceImages.isEmpty else {
             errors.append("No reference images in the \"\(arResourceGroupName)\" group.")
@@ -151,10 +161,7 @@ final class ModelLibrary {
 
         // One at a time rather than all at once: decoding and texture upload happen on the main
         // thread either way, so overlapping them would only make a longer stall.
-        for image in referenceImages {
-            // An unnamed entry cannot be anchored to or matched to a `.usdz`. Xcode names them
-            // from the filename, so this is close to unreachable.
-            guard let name = image.name else { continue }
+        for name in modelNames {
             do {
                 let model = try await Entity(named: name)
                 Self.removeCameras(from: model)
@@ -167,6 +174,18 @@ final class ModelLibrary {
         }
 
         isReady = true
+    }
+
+    /// Every `.usdz` in the bundle bar the shared seafloor, by basename.
+    ///
+    /// The bundle is the list because the naming convention is the content API: a `.usdz` dropped
+    /// in is a model a QR can name, with no catalog entry and no code to keep in step.
+    private static func bundledModelNames() -> [String] {
+        let urls = Bundle.main.urls(forResourcesWithExtension: "usdz", subdirectory: nil) ?? []
+        return urls
+            .map { $0.deletingPathExtension().lastPathComponent }
+            .filter { $0 != seafloorModelName }
+            .sorted()
     }
 
     /// A fresh copy of one card's model, or `nil` if it failed to load.
