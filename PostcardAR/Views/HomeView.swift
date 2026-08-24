@@ -26,7 +26,7 @@ struct HomeView: View {
                     .frame(width: 435.469, height: 435)
                     .offset(x: -136, y: 504)
 
-                Image("HomeCardShape")
+                Image("CardShape")
                     .resizable()
                     .frame(width: 344, height: 439.018)
                     .offset(x: 29, y: 217)

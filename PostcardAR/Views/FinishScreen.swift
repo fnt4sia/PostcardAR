@@ -24,7 +24,7 @@ struct FinishScreen: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Image("FinishCardShape")
+            Image("CardShape")
                 .resizable()
                 .frame(width: cardSize.width, height: cardSize.height)
 
