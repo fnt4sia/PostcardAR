@@ -38,37 +38,47 @@ xcodebuild -project PostcardAR.xcodeproj -scheme PostcardAR -sdk iphoneos build
 
 ## Adding a card
 
-**The name is the link**, and it carries the card's kind too. A reference image called
-`Showcase_postcard` shows `Showcase_postcard.usdz`; a name starting `Simulation` runs the minigame
-on that card. Nothing in the code names a card, so adding one is two files and no code change.
+**A QR on the card is the link**, and it carries the card's kind too. A card whose QR says
+`Showcase_postcard` shows `Showcase_postcard.usdz`; a payload starting `Simulation` runs the
+minigame on that card. The reference image only says *where* the card is, so several cards can
+share one, and nothing in the code names a card. Adding one is a model, a QR, and no code change.
+See [docs/card-identity.md](docs/card-identity.md).
 
 ```
 PostcardAR/
   Assets.xcassets/AR Resources.arresourcegroup/
-    Simulation_coral_with_drupella.arreferenceimage   ← the image ARKit looks for
-    Showcase_postcard.arreferenceimage
-  Simulation_coral_with_drupella.usdz                 ← what appears on it
+    ref-reef.arreferenceimage                         ← where a card is; any card may use it
+  Simulation_coral_with_drupella.usdz                 ← what appears on it, named by the QR
   Showcase_postcard.usdz
+qr/
+  Simulation_coral_with_drupella.png                  ← the code to print on the card
+  Showcase_postcard.png
 ```
 
 1. **Print the card**, and photograph it flat on, evenly lit, no glare, cropped to its edges.
    Export it at roughly **1400px on the long edge** — ARKit gains nothing above that, and a
    print-resolution image costs seconds of loading and hundreds of megabytes to decode. See
    [docs/reference-images.md](docs/reference-images.md).
-2. **Add the image.** In `Assets.xcassets`, select **AR Resources**, drag the image in, and name
-   the entry after the model it should show — prefixed `Simulation` if it should run the minigame,
-   `Showcase` otherwise. (Only `Simulation` is tested for; any other prefix, or none, is a
-   showcase card.)
+2. **Add the image**, if this card does not reuse one already in the group. In `Assets.xcassets`,
+   select **AR Resources** and drag it in. The entry's name is not matched against anything, so
+   name it for your own benefit.
 3. **Set the physical size** in the Attributes Inspector — measure the printed card with a ruler.
-   This decides how far away and how *large* the model is, so approximately right is fine but
-   wrong is visible.
-4. **Add the model.** Drop `<same name>.usdz` into the `PostcardAR/` folder, next to the Swift
-   files. The Xcode target uses a synchronized folder group, so it is picked up automatically —
-   there is no file list to maintain.
-5. Build and run.
+   This decides how far away the model is, and the size the card mask and floor are cut to, so
+   approximately right is fine but wrong is visible.
+4. **Add the model.** Drop `<model name>.usdz` into the `PostcardAR/` folder, next to the Swift
+   files — prefixed `Simulation` if it should run the minigame, `Showcase` otherwise. (Only
+   `Simulation` is tested for; any other prefix, or none, is a showcase card.) The Xcode target
+   uses a synchronized folder group, so it is picked up automatically — there is no file list to
+   maintain.
+5. **Print a QR carrying that exact name** on the card, at error correction level H. There is a
+   generated one per model in `qr/`. It can go anywhere the camera will see it — the card mask
+   covers it on screen, because Vision reads the raw sensor image before anything is drawn over
+   it.
+6. Build and run.
 
-Every image in the group is tracked, and several cards can be on screen at once, each with its
-own model and its own printed size.
+Every image in the group is tracked. One model is drawn at a time: the QR reports one name, so two
+cards in frame together bind to whichever image ARKit lists first — see
+[docs/card-identity.md](docs/card-identity.md).
 
 ### What goes inside the model
 
@@ -85,7 +95,7 @@ case-sensitive, and anything unmatched is scenery:
 | `Seafloor*` | Opts the card *out* of the shared ground plane, because this model brings its own. |
 
 Which minigame a simulation card runs is read from these, not from the card's name: plant points win
-if both are present. So there is one naming rule to keep in step (image ↔ `.usdz`), not two.
+if both are present. So there is one naming rule to keep in step (QR ↔ `.usdz`), not two.
 
 
 The printed card itself is covered over as soon as it is tracked, so design the model to be the
@@ -102,8 +112,9 @@ that card's `modelWidths` entry under about 0.14 so the model fits on its floor.
 | Model is a strange size | It isn't authored scale: `fit(_:named:)` sizes every model to a fixed target width, so that's irrelevant. Tune that card's entry in `modelWidths` instead. |
 | Camera freezes, no error | The `.usdz` brought a camera from Blender. Stripped automatically at load; see [docs/models.md](docs/models.md). |
 | Everything stutters | Model weight. Budget 512² textures and under ~50k triangles, *shared* across all cards — every model loads at launch and stays resident. |
-| A card with no `.usdz` | Tracks fine, shows nothing, and the status panel names the missing file. |
-| No minigame on a card | Either it is a showcase card — only a name starting `Simulation` runs one, and the `.usdz` needs the same prefix — or the model has no `Drupella*` or `CoralPlantPoint*` entities in it, which the status panel says outright. |
+| A card with no `.usdz` | Tracks fine, shows nothing, and the status panel names the missing file. A QR naming a model that is not in the bundle says so outright. |
+| A card tracks but stays empty | Its QR is not decoding. The status panel's `QR:` line gives the rate; if it never appears, the code is too small or too far for the camera — see [docs/card-identity.md](docs/card-identity.md). |
+| No minigame on a card | Either it is a showcase card — only a QR payload starting `Simulation` runs one — or the model has no `Drupella*` or `CoralPlantPoint*` entities in it, which the status panel says outright. |
 | Annotations do not appear | Panels start closed — tap the dot on the model to open one. If there is no dot either, the entity name in the `.usdz` and the `"entity"` in the `.json` have to match exactly; every mismatch is named in the status panel — see [docs/annotations.md](docs/annotations.md). |
 | A coral will not snap onto a plant point | Carry it at least `plantArmDistance` from where you grabbed it, then bring it within `plantSnapRadius` (80 screen points) of a free point on its own structure. |
 | Nothing shows where corals should go | Add a `CoralPlate_NN` to your model beside each `CoralPlantPoint_NN`. The app pulses it while the slot is free and holds it solid when a held coral is about to land there; it draws nothing itself. |
@@ -116,7 +127,7 @@ that card's `modelWidths` entry under about 0.14 so the model fits on its floor.
 ```
 worldRoot (static)     ← one shared anchor, added once, never rewritten
   └── pivot            ← we write a smoothed world pose here, only while the card is tracked
-        └── model      ← <image name>.usdz, scaled to that card at load time
+        └── model      ← the QR-named .usdz, scaled at load time, attached on first bind
 
 AnchorEntity(.image)   ← ARKit rewrites this every frame with the card's raw pose;
                           read from, never written to

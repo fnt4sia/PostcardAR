@@ -15,13 +15,9 @@ In Xcode:
 
 1. Open `Assets.xcassets` and select **AR Resources**.
 2. Drag the card's image (PNG or JPG) into it.
-3. Name the entry after the model it should show. The app pairs image to `.usdz` by that exact
-   string: `Showcase_postcard` draws `Showcase_postcard.usdz`.
-
-   **The prefix picks the card's kind.** A name starting `Simulation` runs a minigame on that
-   card; anything else is a showcase card that only stands its model up to be looked at. Prefix
-   showcase cards `Showcase` for readability — the code only tests for `Simulation`. See
-   [simulation.md](simulation.md).
+3. Name the entry whatever you like. **The name is not matched against anything** — it appears on
+   the status panel and nowhere else. Which model stands on a card, and whether that card runs a
+   minigame, is decided by the QR printed on it; see [card-identity.md](card-identity.md).
 4. In the Attributes Inspector, set the **physical size** of the printed card. For a standard A6
    postcard that is 148 × 105 mm. Xcode fills in the second dimension from the aspect ratio.
 
@@ -121,6 +117,12 @@ not start tracking another until one currently tracked is lost.
 Two cards that look alike to a feature matcher will compete. If one card only ever appears when
 the other is out of frame, suspect shared artwork — a common border, logo, or background —
 before suspecting the app.
+
+That competition costs less than it used to, and the cheapest way out of it is to stop fighting:
+identity comes from the QR now, so a set of cards may share a *single* reference image outright,
+tuned once until it tracks perfectly. Whichever image ARKit matched, the anchor lands on the card
+in front of the lens. What is lost is telling two cards apart when both are in frame at once —
+see the limits in [card-identity.md](card-identity.md).
 
 ## Printing
 

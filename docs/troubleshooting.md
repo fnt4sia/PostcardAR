@@ -11,7 +11,8 @@ The camera screen has a panel in the top corner:
 | **Looking for a card…** / **Detected: `name`, `name`** | Which reference images ARKit is tracking *right now*, from `Entity.isAnchored`. A model can outlive its entry: a card lost while a hand is in frame stays locked on screen — see "Tracking loss, and the occlusion lock" in [tracking.md](tracking.md). |
 | **Locked: `name`** (yellow) | That card's model is on screen while ARKit is *not* tracking its card — the occlusion lock is holding it. Absent when nothing is locked. |
 | **Hand in frame** / **No hand** | Whether Vision currently sees a hand at all, which is what the lock runs on. Looser than pinching: a hand can be present here and too poorly resolved for `evaluatePinch(ratio:at:)` to read a pinch off it. |
-| **Loading models (n/total)…** / **Models loaded (n)** | How many `.usdz` files have finished loading, one per reference image. |
+| **No QR** / **QR: `name` · `n`%** | The model name last decoded from a QR, and the fraction of the last two seconds' samples that decoded anything. The percentage is the useful half — a QR is checksummed, so a name that arrives is right, and the only failure mode is a name that does not arrive. See [card-identity.md](card-identity.md). |
+| **Loading models (n/total)…** / **Models loaded (n)** | How many `.usdz` files have finished loading, one per model in the bundle. |
 | Red text | An `ARSession` error, or a model that failed to load — named, one line each. |
 
 The panel is hidden while a run is on screen (`countdown`, `playing`, `finished`), where it would
@@ -22,8 +23,10 @@ Read them together:
 
 - Never says *Detected* → the reference image is the problem.
 - One card detected and another never → that one image, not the app.
-- *Detected* but nothing visible on that card → the model. Still loading, missing, or loaded at a
-  scale that puts it off-screen or inside the camera.
+- *Detected* but *No QR* → the code, not the card. It is too small, too far, or too blurred to
+  decode. Nothing will appear: a tracked card alone never summons a model.
+- *Detected* and a *QR* name, but nothing visible → the model. Still loading, missing, or loaded at
+  a scale that puts it off-screen or inside the camera.
 - Red text → the message names which file or which half failed.
 
 A large `.usdz` can take several seconds, and they load one after another, so the count climbs
@@ -45,16 +48,21 @@ Compare the two images, not the code — every card goes through identical code.
 are a weak second image, or two cards that share enough artwork (a border, a logo, a background)
 that they compete for the same features.
 
-Also confirm the second entry is actually in the group and named as you think: the pairing to its
-`.usdz` is by exact name.
+Since identity moved to the QR, this costs less than it used to: the two cards may simply share one
+reference image. Whichever one ARKit matched, the anchor lands on the card in front of the lens and
+the payload names the model. See [card-identity.md](card-identity.md).
 
 ### Detected, but no model appears on that card
 
 In order of likelihood:
 
-1. Its `.usdz` is missing or misnamed. A red line names the file it tried to load.
-2. Still loading. Watch the count.
-3. It loaded and was scaled wrong — see the next two entries.
+1. **Its QR is not decoding.** The panel says *No QR*, and a tracked card on its own draws nothing.
+   Enlarge the code, move closer, or hold steadier — the percentage on the `QR:` line tells you how
+   close you are. See [card-identity.md](card-identity.md).
+2. The QR decoded to a name with no `.usdz` behind it. A red line says so outright.
+3. Its `.usdz` is missing or misnamed. A red line names the file it tried to load.
+4. Still loading. Watch the count.
+5. It loaded and was scaled wrong — see the next two entries.
 
 ### Another card's model appears on the card I am scanning, or floats in mid-air
 

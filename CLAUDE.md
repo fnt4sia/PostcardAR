@@ -5,14 +5,18 @@ one.
 
 ## Concept
 
-1. Every reference image in the app's AR resource group is a card.
+1. Every reference image in the app's AR resource group marks *where* a card is. It no longer says
+   *which* card: several printed cards may share one image.
 2. ARKit tracks all of them in the camera feed every frame.
-3. RealityKit renders, on each tracked card, the `.usdz` in the bundle **named after that card's
-   reference image** — `Showcase_postcard` in the group draws `Showcase_postcard.usdz`.
+3. **A QR printed on the card names the model**, and its payload is that model's name verbatim —
+   a card carrying `Showcase_postcard` draws `Showcase_postcard.usdz`. Reference images therefore
+   only have to track *well*, not track *distinguishably*, which is the hard half to author. See
+   `docs/card-identity.md`.
 4. The model stays attached to its card while the card is visible: move or tilt the card and the
    model follows.
-5. **A card's name prefix decides its kind.** `Simulation*` runs a minigame on it; anything else
-   is a *showcase* card that only stands its model up to be looked at. See `docs/simulation.md`.
+5. **The QR payload's prefix decides the card's kind.** `Simulation*` runs a minigame on it;
+   anything else is a *showcase* card that only stands its model up to be looked at. See
+   `docs/simulation.md`.
 6. **Which minigame is decided by the model's contents, not its name** — `CoralPlantPoint*` inside
    it means the planting game, `Drupella*` the removal game. See `docs/simulation.md`.
 7. Two gestures, and they never overlap. **Pinch**, on simulation cards only, picks up a grabbable
@@ -22,15 +26,15 @@ one.
 8. A model of either kind may carry `ANNO*` entities, which build explanation labels — billboarded
    panels in the scene — from a `.json` file of the same name as the card. See `docs/annotations.md`.
 
-Adding a card is two files — an image in the resource group and a `.usdz` of the same name — and no
-code change; a third, `<name>.json`, if it has annotations. Nothing in the source names an
-individual card.
+Adding a card is a `.usdz` in `PostcardAR/` and a QR carrying its name — no catalog entry of its
+own, and no code change; a second file, `<name>.json`, if it has annotations. Any reference image
+in the group will carry it. Nothing in the source names an individual card.
 
 **The naming conventions are the whole content API.** All prefix matches, all case-sensitive:
 
 | Name | Means |
 |---|---|
-| `Simulation*` (card) | runs a minigame; anything else is a showcase card |
+| `Simulation*` (QR payload / `.usdz`) | runs a minigame; anything else is a showcase card |
 | `ANNO*` | a point to hang an explanation label on; its panel is built into the scene on a ring around the model, closed until its dot is tapped |
 | `Drupella*` | a grabbable snail; `*_Outline` is its outline mesh |
 | `CoralPlantPoint*` | a slot a coral can be planted into — and the marker that a model *is* the planting game |
@@ -69,14 +73,16 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 | `PostcardAR/ContentView.swift` | Start button, the loading/camera swap, the status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
 | `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan. Owns `fit`, `removeCameras`, `modelWidths` |
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
+| `PostcardAR/QRCardIdentity.swift` | Decoding the QR that names a card's model, and how reliably it is arriving |
 | `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — the grabbable pool, both minigames' grab/release rules, hand-pose sampling, haptics |
 | `PostcardAR/Annotations.swift` | Explanation labels: finding `ANNO*` entities, reading their JSON, and building the billboarded panels into the scene |
 | `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the run, the 3 s grace. Shared by both minigames |
 | `PostcardAR/Minigame.swift` | The two games' settings: run length and every word the player reads. One block per game |
 | `PostcardAR/Views/` | The Figma-traced screens — home, loading, instructions, countdown, HUD, result — and `DesignTokens` |
 | `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
-| `PostcardAR/<image name>.usdz` | The model for the card of that name — see `docs/models.md` for what makes one usable |
-| `PostcardAR/<image name>.json` | Annotation text for that card, if it has any — see `docs/annotations.md` |
+| `PostcardAR/<model name>.usdz` | A model a QR can name — see `docs/models.md` for what makes one usable |
+| `PostcardAR/<model name>.json` | Annotation text for that model, if it has any — see `docs/annotations.md` |
+| `qr/<model name>.png` | Generated QR carrying that name, to print on the card |
 | `PostcardAR/Seafloor.usdz` | Not a card. The shared ground plane laid under every model that does not bring its own — see `docs/models.md` |
 | `README.md` | What the project is, how to run it, how to add a card |
 | `docs/` | Design notes, one file per area |
@@ -86,6 +92,7 @@ Documentation is split by area, and each file owns its topic:
 | File | Owns |
 |---|---|
 | `docs/reference-images.md` | The AR resource group, physical size, what makes an image trackable |
+| `docs/card-identity.md` | Which model goes on a card: the QR payload, the binding, and why it outlives the payload |
 | `docs/models.md` | `.usdz` naming, scaling to the card, weight budget, imported scene contents |
 | `docs/tracking.md` | Session, anchors, entity hierarchy, render loop, the occlusion lock, people occlusion |
 | `docs/smoothing.md` | The dead band and glide filter, and its three constants |
@@ -103,15 +110,16 @@ The camera permission string lives in the build settings as
 
 ## Entity hierarchy
 
-One branch per reference image, all added to the scene up front. An image anchor draws nothing
-until ARKit tracks its image, so cards that are not on camera cost nothing.
+Two independent lists, joined by the QR. One `CardAnchor` per reference image — pose and printed
+size, added to the scene up front, drawing nothing until ARKit tracks its image. One `Card` per
+`.usdz` in the bundle — a pivot, empty until a payload names it. See `docs/card-identity.md`.
 
 ```
 worldRoot (static)     <- AnchorEntity(world: .zero), added once, never written to
   └── pivot            <- smoothed world pose, and the `isEnabled` that drives visibility/lock
         ├── mask       <- generated quad at the card's own printed size, hiding the artwork
         ├── seafloor   <- shared Seafloor.usdz, sized to the *card*, top surface just above y=0
-        └── model      <- <image name>.usdz, sized by `fit` to `modelWidths`, base at y=0
+        └── model      <- the QR-named .usdz, sized by `fit` to `modelWidths`, base at y=0
 
         All three are siblings, so they are rigidly attached to each other and to the card. The
         floor is never a child of the model: `fit` measures the model's own bounds.
@@ -120,10 +128,12 @@ AnchorEntity(.image)   <- ARKit rewrites this transform every frame. Never modif
                           parent anything visible under it — see "Visibility" below.
 ```
 
-The `Coordinator` keeps these in a `cards` array of `Card` structs — name, kind, printed width,
-anchor, pivot, and that card's own `heldPose`. The struct is copied freely because `anchor` and
-`pivot` are entities, which are classes; only `heldPose` needs mutating in place, which is why
-the per-frame loop indexes (`cards[index]`) rather than iterating values.
+The `Coordinator` keeps two arrays and a binding between them: `anchors` of `CardAnchor` (image
+name, printed size, anchor entity — where a card is, never which one), `cards` of `Card` (model
+name, kind, pivot, `heldPose` — what a card is, never where), and `bound`, the pair a decoded
+payload joins. Structs are copied freely because the entities in them are classes; `heldPose` and
+the attachment flags need mutating in place, which is why the per-frame loop indexes
+(`cards[index]`) rather than iterating values.
 
 ARKit re-solves each card's pose from scratch every frame, and the raw solution wobbles even
 when the card is still. Smoothing that means writing a pose of our own — and the anchor is not
@@ -160,20 +170,26 @@ driven by hand.** Pivots are created with `isEnabled = false`, and each rendered
 let handInFrame = held != nil
     || Date().timeIntervalSince(lastHandSeenTime) < handPresenceTimeout
 let isSimulation = cards[index].kind == .simulation
-let visible = tracked || (cards[index].pivot.isEnabled && handInFrame && isSimulation)
+let named = pinch.qrPayload == cards[index].name
+let visible = (tracked && named)
+    || (cards[index].pivot.isEnabled && (tracked || (handInFrame && isSimulation)))
 ```
 
-| Card tracked | Hand in frame | Simulation | Model |
-|---|---|---|---|
-| yes | either | either | drawn, pose updated |
-| no | yes, and already showing | yes | **locked** in place, pose frozen |
-| no | no | either | hidden |
-| no | either | no | hidden |
+| Card tracked | QR names this card | Hand in frame | Simulation | Model |
+|---|---|---|---|---|
+| yes | yes | either | either | drawn, pose updated |
+| yes | no, but already showing | either | either | drawn, pose updated |
+| yes | no, and not showing | either | either | hidden — a card alone never summons a model |
+| no | either | yes, and already showing | yes | **locked** in place, pose frozen |
+| no | either | no | either | hidden |
+| no | either | either | no | hidden |
 
 Two things are load-bearing and must survive any rewrite:
 
-1. **Only a tracked frame can enable a pivot.** The lock latches on `pivot.isEnabled`, so it can
-   hold a model but never summon one. Drop that and every model is drawn at the world origin —
+1. **Only a frame that is both tracked and QR-named can enable a pivot.** The lock latches on
+   `pivot.isEnabled`, so it can hold a model but never summon one. The payload must *name the bound
+   card*, not merely decode: a binding is never cleared, so a bare "some QR is in shot" test lets
+   an unrelated code re-summon the last model bound — see `docs/card-identity.md`. Drop that and every model is drawn at the world origin —
    the phone's position at session start — from the moment its `.usdz` loads, because an unwritten
    pivot sits at the identity transform. All models load at launch, so they pile up there and
    whichever card is near that spot appears to have spawned them.
@@ -295,7 +311,7 @@ guard fails routinely mid-pinch and would otherwise blur every drag. See `docs/i
 
 ## Card kinds and the run
 
-A card's name prefix decides what it is: `Simulation*` runs a minigame, anything else is a
+The QR payload's prefix decides what a card is: `Simulation*` runs a minigame, anything else is a
 showcase card. Three things and nothing else turn on that — whether the occlusion lock may hold
 the model, whether the model's grabbable entities enter the pool, and whether seeing the card starts
 a `GameSession`. Annotations are deliberately not on that list: they key off entities and a JSON
