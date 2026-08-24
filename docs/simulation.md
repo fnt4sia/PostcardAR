@@ -54,7 +54,7 @@ There are two, and a simulation card's `.usdz` says which one it is by what is i
 |---|---|---|---|
 | `CoralPlantPoint*` | **PlantingCoral** | `SingleCoral*` | the plant points |
 | `Drupella*` (and no plant points) | **RemovingDrupella** | `Drupella*` | — |
-| neither | none — reported to the status panel | | |
+| neither | none — printed to the console | | |
 
 ```swift
 enum Minigame {
@@ -250,7 +250,7 @@ once a rendered frame whether the card it belongs to is on screen, and it decide
 
 | Phase | Screen | Card needed | Losing it |
 |---|---|---|---|
-| `idle` | nothing but the status panel | — | — |
+| `idle` | nothing | — | — |
 | `instructions` | dimmed panel, what to do, **Start** | yes | straight to `idle`, no grace |
 | `countdown` | 3 · 2 · 1 | yes | `grace` |
 | `playing` | clock and score HUD, pieces grabbable | yes | `grace` |
@@ -280,7 +280,7 @@ card that was *tracked* this frame.
 asks `PinchInteraction.setup(for:)` for the card's game and target, and that answer does not exist
 until `collect(from:named:report:)` has run on the loaded `.usdz`. A card seen while its model is
 still decoding therefore puts no panel up, and neither does one whose model holds neither plant
-points nor snails — which is already reported to the status panel rather than silently starting a
+points nor snails — which is already printed to the console rather than silently starting a
 run with nothing in it.
 
 ## Losing the card mid-run
@@ -386,7 +386,7 @@ time, and handed over by `setup(for:)`:
 
 The smaller of the two for planting, not the number of slots: a board shipping fewer corals than
 points can never fill them all, so a target of the slot count would never be reached and the early
-finish would never fire. That mismatch is already reported to the status panel at load time.
+finish would never fire. That mismatch is already printed to the console at load time.
 
 `target > 0` guards the whole thing, so a card that somehow registered no pieces runs its clock out
 rather than finishing on the first frame.
@@ -455,10 +455,6 @@ rather than a session that switches cards.
 All in `ContentView.swift`, one branch of `runOverlay` per phase, over the same dimmed backdrop
 except for the HUD — which deliberately has none, since that is the one screen where the coral has
 to stay visible. See "Part 4" in [app-shell.md](app-shell.md).
-
-The status panel is hidden during `countdown`, `playing` and `finished`, where it would sit on top
-of the HUD. It is kept up for `grace` on purpose: *Hand in frame* with nothing locked is exactly
-the reading needed when a model failed to hold, and the grace screen is the moment it failed.
 
 Pinch pickup is only live during `playing` — `attemptGrab(at:)` is gated on `phase == .playing`,
 so pinching through any other screen does nothing.

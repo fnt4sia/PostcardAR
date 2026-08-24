@@ -47,7 +47,7 @@ annotations belong on showcase cards, but nothing enforces it.
 
 ### When they do not appear
 
-Every mismatch is reported to the status panel, because the names have to agree exactly and nothing
+Every mismatch is printed to the console, because the names have to agree exactly and nothing
 else would tell you they do not:
 
 | Panel line | Cause |

@@ -99,12 +99,11 @@ final class ModelLibrary {
     private(set) var loaded = 0
     private(set) var total = 0
 
-    /// Collected rather than replaced, same as `ARStatus.errors`: with several models, one missing
-    /// `.usdz` must not hide the next. Handed to `ARStatus` when a coordinator starts, since the
-    /// status panel does not exist yet at load time.
+    /// Collected rather than replaced: with several models, one missing `.usdz` must not hide the
+    /// next. Drained by `Coordinator.start(in:)`, which runs after the library has loaded.
     private(set) var errors: [String] = []
 
-    /// Sorted by name, so the status list does not reshuffle between runs.
+    /// Sorted by name, so anchor order is stable between runs.
     @ObservationIgnored private(set) var referenceImages: [ARReferenceImage] = []
 
     /// Every model in the bundle, by name — one `.usdz` each, `Seafloor` excluded since it is
@@ -190,15 +189,11 @@ final class ModelLibrary {
 
     /// A fresh copy of one card's model, or `nil` if it failed to load.
     ///
-    /// **A clone, not the model itself.** A scan mutates what it is given — corals are carried to
-    /// plant points, snails are hidden and faded, `hideGeometry(of:)` strips annotation markers —
-    /// and `PinchInteraction` reads each piece's *current* transform as the `home` it restores to.
-    /// Handing back the same tree on the next scan would therefore record a planted coral's slot
-    /// as its home, and a half-played model would be on screen before the run even began.
-    ///
-    /// Cloning costs nothing worth measuring next to loading: `MeshResource` and the materials are
-    /// reference-backed handles, so a clone shares the GPU resources rather than uploading them
-    /// again. What it copies is the entity tree and its components.
+    /// **A clone, not the model itself.** A scan mutates what it is given — corals get planted,
+    /// snails hidden, annotation markers stripped — and `PinchInteraction` reads each piece's
+    /// *current* transform as the `home` it restores to, so reusing one tree would record a planted
+    /// coral's slot as its home. Clones share `MeshResource` and materials, so nothing is
+    /// re-uploaded.
     func model(named name: String) -> Entity? {
         models[name]?.clone(recursive: true)
     }
@@ -213,12 +208,9 @@ final class ModelLibrary {
     /// deliberately: a model's size is an artistic choice that must stay free of the card's printed
     /// size, whereas matching the card *is* this thing's whole job.
     ///
-    /// **`min`, not `max` — a "contain" fit.** The floor is never allowed to spill past the card.
-    /// That costs nothing here because the asset is authored to the card's proportions: the sand
-    /// measures 9.747 × 12.682 (0.7686) against a 5855 × 7605 card (0.7699), so a uniform scale
-    /// lands within about 0.2% on both axes and the "gap" is a few tenths of a millimetre — which
-    /// the card mask underneath covers anyway. Should a future card have a different aspect ratio,
-    /// `min` keeps the floor inside its edges rather than hanging over the table.
+    /// **`min`, not `max` — a "contain" fit**, so the floor never spills past the card's edge.
+    /// The asset is authored to the card's proportions, so it costs a few tenths of a millimetre
+    /// on one axis, which the mask underneath covers.
     ///
     /// **The y placement is what stops models looking like they are flying.** See `seafloorEmbed`.
     func seafloor(under model: Entity, sizedTo cardSize: CGSize,
@@ -292,13 +284,10 @@ final class ModelLibrary {
 
     /// Strips any camera the model brought with it.
     ///
-    /// A `.usdz` is a scene, not a mesh: exported from Blender it carries the lighting rig and the
-    /// viewport camera too. RealityKit turns a USD `Camera` prim into a real `PerspectiveCamera`
-    /// entity, and adding one to an `ARView` scene hands rendering over to it — the passthrough
-    /// video freezes, with no error and nothing in the log. Imported lights are inert and are left
-    /// alone; cameras are not.
-    ///
-    /// Done once here rather than per scan, so the clones never carry one.
+    /// A `.usdz` is a scene, not a mesh, and a Blender export carries the viewport camera.
+    /// RealityKit turns a USD `Camera` prim into a real `PerspectiveCamera`, and adding one to an
+    /// `ARView` scene hands rendering to it — **the passthrough video freezes**, with no error and
+    /// nothing in the log. Imported lights are inert and left alone; cameras are not.
     private static func removeCameras(from entity: Entity) {
         // Snapshot the children, because the recursive call can remove one of them.
         for child in Array(entity.children) {

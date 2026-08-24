@@ -11,10 +11,10 @@
 //  on any global mode: `releaseHeld()` and the plant-on-hover branch of `updateDrag()`. Each game's
 //  settings and copy are in `Minigame.swift`.
 //
-//  `PostcardARView.Coordinator` owns one `PinchInteraction` and talks to it through five calls:
-//  `attach(to:)` once at start, `collect(from:named:report:)` once per loaded simulation model,
-//  `update()` once a rendered frame, and `handInFrame` read once a rendered frame for the
-//  occlusion lock. Nothing here reaches back into the coordinator except through `game`.
+//  `PostcardARView.Coordinator` owns one `PinchInteraction`: `attach(to:)` once at start,
+//  `collect(from:named:report:)` once per loaded simulation model, `setup(for:)` when a card
+//  claims the session, `update()` once a rendered frame, and `handInFrame` / `qrPayload` read
+//  per frame. Nothing here reaches back into the coordinator except through `game`.
 //
 
 import ARKit
@@ -414,27 +414,21 @@ final class PinchInteraction {
     /// state where nothing on screen responds and nothing says why, which is the whole reason it
     /// is surfaced.
     ///
-    /// Two conditions, and **both** are required: the hand has to be measurably close
-    /// (`handTooCloseSegmentFraction`, from a real on-screen size — see
-    /// `longestFingerSegment(of:screenPoint:)`), *and* this sample has to have failed to produce a
-    /// pinch. Closeness alone would nag through a hand that is close and working fine; unreadable
-    /// alone is what an earlier version used, and it fired on every hand it could not read for any
-    /// reason at all — one far enough away for the fingertips to fall below
-    /// `jointConfidenceMinimum`, or one that had already left the frame, since `lastHandSeenTime`
-    /// keeps saying "hand" for a whole `handPresenceTimeout` after the hand is gone.
+    /// **Both** conditions are required: the hand is measurably close
+    /// (`handTooCloseSegmentFraction`, from a real on-screen size) *and* this sample failed to
+    /// produce a pinch. Unreadable alone is what an earlier version used, and it fired on every
+    /// hand it could not read — including one far enough away for its fingertips to drop below
+    /// `jointConfidenceMinimum`, and one already gone, since `lastHandSeenTime` keeps reporting a
+    /// hand for a whole `handPresenceTimeout` afterwards. Do not reuse the lock's clocks here.
     ///
     /// Written once per sample rather than derived from timestamps, so "no hand" is answered by
-    /// the absence of a hand in *this* sample instead of by a clock that has not run out yet.
+    /// this sample, not by a clock that has not run out.
     private(set) var handTooClose = false
 
-    /// The card name last read off a QR in the camera frame, and how often one is coming through.
-    ///
-    /// The payload is acted on — `Coordinator.rebind(to:)` binds the model it names to whichever
-    /// anchor is tracked, and it is half the latch that may turn a pivot on. The rate is reported
-    /// to the status panel and acted on by nothing. Surfaced through here because this class owns
-    /// the sampler the read shares — see `QRCardIdentity`.
+    /// The card name last read off a QR. `Coordinator.rebind(to:)` binds the model it names to
+    /// whichever anchor is tracked, and it is half the latch that may turn a pivot on. Surfaced
+    /// through here because this class owns the sampler the read shares — see `QRCardIdentity`.
     var qrPayload: String? { qr.payload }
-    var qrDecodeRate: Double { qr.decodeRate }
 
     /// Asks the session for one full-resolution frame and looks for a QR in it.
     ///
@@ -592,11 +586,10 @@ final class PinchInteraction {
     /// Breathes the plate on every free slot, and holds the one a held coral would drop into solid.
     /// Runs once a rendered frame, from `update()`.
     ///
-    /// **Nothing is drawn and nothing is moved.** Two earlier attempts at an indicator built geometry
-    /// of the app's own — a disc sized against the corals — and both failed on sizing: on a board
-    /// whose slots sit closer together than its corals are wide, the discs overlapped into a single
-    /// blob. The model already knows how big a socket is and where it faces, so the only thing left
-    /// worth doing is making its own plate impossible to miss. Opacity is the whole mechanism.
+    /// **Nothing is drawn and nothing is moved.** Two earlier attempts built app-drawn discs sized
+    /// against the corals, and both fused into one blob on a board whose slots sit closer together
+    /// than its corals are wide. The model already knows how big a socket is; opacity is the whole
+    /// mechanism.
     ///
     /// Three states, and the difference between the first two is the signal:
     ///
@@ -744,12 +737,10 @@ final class PinchInteraction {
     /// from the lens. `nil` when no two adjacent joints on any finger both resolved, which is a
     /// "cannot tell", never a "too close".
     ///
-    /// Apparent segment length scales inversely with distance, and measuring *segments* rather
-    /// than the span of the whole hand is what makes it survive the case it exists for: a hand
-    /// against the lens has its wrist and most of its palm outside the frame, so any whole-hand
-    /// measure collapses exactly when the hand is closest. Two adjacent joints on one finger are
-    /// still visible. The longest pair wins rather than an average, because with a hand that
-    /// close only a couple of segments resolve and any one of them being huge settles the question.
+    /// **Measure segments, never the whole hand's span.** A hand against the lens has its wrist and
+    /// most of its palm out of frame, so a whole-hand measure collapses exactly when the hand is
+    /// closest, while two adjacent joints on one finger stay visible. Longest pair rather than an
+    /// average: only a couple resolve at that range, and one being huge settles it.
     ///
     /// Measured in screen points, not `Joint.distance(to:)`: that returns normalized units, where
     /// x and y are scaled by different numbers of pixels, so a diagonal segment's length depends on
@@ -823,8 +814,7 @@ final class PinchInteraction {
             let handler = ImageRequestHandler(pixelBuffer, orientation: imageOrientation)
             let results = try? await handler.perform(handPoseRequest, QRCardIdentity.request)
             let hand = results?.0.first
-            // Noted every sample, including the ones that read nothing — `decodeRate` is a
-            // fraction of samples taken, so skipping the misses would peg it at 100%.
+            // Noted every sample, misses included — that is what ages `payload` out.
             qr.note(results?.1 ?? [])
 
             // Presence is a far looser question than pinching, and has to be asked first. A

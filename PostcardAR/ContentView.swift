@@ -48,12 +48,11 @@ struct ContentView: View {
     }
 }
 
-/// The camera, full screen, with a status panel and — on a Simulation card — the run's UI over it.
+/// The camera, full screen, with the run's UI over it on a Simulation card.
 ///
-/// `status` and `game` are created here and handed down. They are the only channels out of the AR
-/// view: the coordinator writes to them, and reading a property in `body` is what subscribes this
-/// view to changes in that property. `game` also flows the other way, since Start and Play Again
-/// are buttons; the coordinator notices those by watching the phase change, not by being called.
+/// `status` and `game` are the only channels out of the AR view: the coordinator writes to them,
+/// and reading one in `body` is what subscribes this view. `game` also flows back, since Start and
+/// Play Again are buttons — the coordinator watches the phase rather than being called.
 private struct ScannerScreen: View {
     /// Loaded before this screen was built — see `ModelLibrary`.
     let library: ModelLibrary
@@ -225,71 +224,6 @@ private struct ScannerScreen: View {
         // Keeping it local to this helper means only a dimmed() panel's own appear/disappear
         // animates; nothing else's gestures get caught in it.
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: game.phase)
-    }
-
-    // MARK: Status
-
-    /// Hidden once a run is on screen, where it would sit on top of the HUD. Kept up for the
-    /// grace screen on purpose: "hand in frame" with nothing locked is exactly the reading needed
-    /// when a model failed to hold, and that is the moment it failed.
-    private var showsStatusPanel: Bool {
-        switch game.phase {
-        case .idle, .instructions, .grace: true
-        case .countdown, .playing, .finished: false
-        }
-    }
-
-    /// Detection and model loading are reported separately, because when nothing shows up the
-    /// question is always which of the two failed. Both are counts now that the group can hold
-    /// several cards: which ones are on camera, and how many of their models have arrived.
-    private var statusPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            line(!status.detectedImages.isEmpty,
-                 done: "Detected: \(status.detectedImages.joined(separator: ", "))",
-                 waiting: "Looking for a card…", icon: "viewfinder")
-
-            // Only while it is actually holding something. The lock is invisible when it works
-            // — the model simply stays put — so this is what says it was the lock and not luck,
-            // and the hand icon says whether Vision is seeing the hand at all.
-            if !status.lockedImages.isEmpty {
-                Label("Locked: \(status.lockedImages.joined(separator: ", "))",
-                      systemImage: "lock.fill")
-                    .foregroundStyle(.yellow)
-            }
-
-            Label(status.handInFrame ? "Hand in frame" : "No hand",
-                  systemImage: status.handInFrame ? "hand.raised.fill" : "hand.raised.slash")
-                .foregroundStyle(status.handInFrame ? Color.green : .white.opacity(0.6))
-
-            // The QR experiment's readout. The percentage is the point, not the name: a name
-            // that flickers in at 20% cannot carry card identity however correct it is while it
-            // is there. See `QRCardIdentity`.
-            Label(status.qrPayload.map { "QR: \($0) · \(Int(status.qrDecodeRate * 100))%" }
-                    ?? "No QR",
-                  systemImage: status.qrPayload == nil ? "qrcode.viewfinder" : "qrcode")
-                .foregroundStyle(status.qrPayload == nil ? .white.opacity(0.6) : Color.green)
-
-            line(status.totalImages > 0 && status.loadedModels == status.totalImages,
-                 done: "Models loaded (\(status.loadedModels))",
-                 waiting: "Loading models (\(status.loadedModels)/\(status.totalImages))…",
-                 icon: "clock")
-
-            ForEach(status.errors, id: \.self) { message in
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-        }
-        .font(.subheadline.weight(.medium))
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.black.opacity(0.6), in: .rect(cornerRadius: 12))
-        .padding()
-    }
-
-    private func line(_ isDone: Bool, done: String, waiting: String, icon: String) -> some View {
-        Label(isDone ? done : waiting, systemImage: isDone ? "checkmark.circle.fill" : icon)
-            .foregroundStyle(isDone ? Color.green : .white)
     }
 }
 

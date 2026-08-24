@@ -102,7 +102,7 @@ so the authored size of the model never needs touching.
 If a model is very tall or very deep, matching widths may not be the right rule. In that case
 divide by `bounds.extents.y` or `.z` instead of `.x` inside `fit(_:named:)`.
 
-If the measurement fails, the scale is skipped and a red line appears in the status panel. That
+If the measurement fails, the scale is skipped and the reason is printed to the console. That
 case is worth reporting rather than passing over quietly: a model authored in metres, left
 unscaled on a card a few centimetres wide, puts the camera *inside* the model. The screen fills
 with texture that barely moves, which reads as the app having frozen rather than as a sizing bug.
@@ -366,7 +366,7 @@ shown. Ten cards means ten models resident and ten lots of texture memory.
 
 They load one at a time, in name order: decoding is main-thread work either way, so overlapping
 them would only lengthen the stall, and finishing the first card early means it is usable while
-the rest arrive. The status panel counts them, so a long "Loading models (2/10)…" is that queue,
+the rest arrive. `LoadingView` counts them, so a long "Loading models (2/10)…" is that queue,
 not a hang.
 
 ## Authoring

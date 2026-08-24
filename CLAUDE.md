@@ -70,10 +70,10 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 
 | Path | Purpose |
 |---|---|
-| `PostcardAR/ContentView.swift` | Start button, the loading/camera swap, the status overlay, and the run's UI (instructions, countdown, HUD, grace, result) |
+| `PostcardAR/ContentView.swift` | Start button, the loading/camera swap, and the run's UI (instructions, countdown, HUD, grace, result) |
 | `PostcardAR/ModelLibrary.swift` | Reference images and models, loaded once per launch and reused by every scan. Owns `fit`, `removeCameras`, `modelWidths` |
 | `PostcardAR/PostcardARView.swift` | `UIViewRepresentable` wrapping `ARView`, plus the `Coordinator` that owns the session, entities, filter, model loading, and card kinds |
-| `PostcardAR/QRCardIdentity.swift` | Decoding the QR that names a card's model, and how reliably it is arriving |
+| `PostcardAR/QRCardIdentity.swift` | Decoding the QR that names a card's model |
 | `PostcardAR/PinchInteraction.swift` | Everything pinch pickup touches — the grabbable pool, both minigames' grab/release rules, hand-pose sampling, haptics |
 | `PostcardAR/Annotations.swift` | Explanation labels: finding `ANNO*` entities, reading their JSON, and building the billboarded panels into the scene |
 | `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the run, the 3 s grace. Shared by both minigames |
@@ -96,11 +96,11 @@ Documentation is split by area, and each file owns its topic:
 | `docs/models.md` | `.usdz` naming, scaling to the card, weight budget, imported scene contents |
 | `docs/tracking.md` | Session, anchors, entity hierarchy, render loop, the occlusion lock, people occlusion |
 | `docs/smoothing.md` | The dead band and glide filter, and its three constants |
-| `docs/app-shell.md` | SwiftUI, the `UIViewRepresentable` bridge, the status panel |
+| `docs/app-shell.md` | SwiftUI, the `UIViewRepresentable` bridge, the screen flow |
 | `docs/interaction.md` | Pinch pickup: Vision hand-pose sampling, grab/drag/release, tuning |
 | `docs/simulation.md` | Card kinds, which minigame a model is, both games' rules, the run's phases and clocks, scoring |
 | `docs/annotations.md` | Explanation labels: the `ANNO*`/JSON pairing, the ring layout, and why a panel is a texture rather than a SwiftUI view |
-| `docs/troubleshooting.md` | Symptom → cause, starting from the status panel |
+| `docs/troubleshooting.md` | Symptom → cause, starting from the Xcode console |
 
 The Xcode target uses a synchronized folder group, so any file added under `PostcardAR/`
 is picked up automatically. There is no `project.pbxproj` file list to maintain.
@@ -212,9 +212,6 @@ the pose the lock exists for, and the lock never fires. `handPresenceTimeout` (1
 longer than `handPoseLossTimeout` (0.3 s): Vision samples at 15 Hz and a dropped sample must not
 flicker a model, while a late snail release is barely noticeable.
 
-The status panel reports `lockedImages` and `handInFrame` for exactly this reason — the lock is
-invisible when it works and indistinguishable from a Vision failure when it does not.
-
 `heldPose` is left alone whether the card is locked or hidden, so a card that comes back glides on
 from where it was rather than snapping. `attemptGrab(at:)` skips snails that are not
 `isEnabledInHierarchy`, so hidden cards' snails cannot be grabbed while locked ones can. All of
@@ -273,23 +270,16 @@ closes a 50 cm jump in about half a second, which is fast enough that even a car
 somewhere new just glides there — see "Visibility" above for why `heldPose` survives loss
 rather than being cleared.
 
-`ARStatus.detectedImages` is rebuilt each frame from `anchor.isAnchored` — live tracking state,
-not what is on screen: a locked model is drawn while its card is listed as not detected, which is
-the lock showing through the UI rather than a bug. Guard the write with an inequality check
-regardless: `@Observable` notifies on every set
-without comparing, and this runs once a frame.
-
 ## Status
 
-`ARStatus` carries `detectedImages` (names tracked right now), `lockedImages` (models held on
-screen by the occlusion lock), `handInFrame`, `handTooClose`, `loadedModels` / `totalImages`, and
-`errors`. Errors are a list, not one string: with several models, a missing `.usdz` must not hide
-the next one. `report(_:)` drops repeats, because `didFailWithError` can fire on every frame and
-the panel is not a log.
+`ARStatus` carries exactly two fields, both of which draw player-facing UI:
+`annotatedShowcaseVisible` and `handTooClose`. Anything written there is read by `ContentView`, so
+do not add a field for diagnosis — there is no debug panel any more. Guard every write with an
+inequality check: `@Observable` notifies on every set without comparing, and this runs once a frame.
 
-The lock's two fields are there to make a device-only behaviour observable: a model that vanishes
-tells you nothing on its own, while "hand seen, nothing locked" and "no hand seen" are different
-bugs. Keep them if the panel is reworked.
+Diagnostics go to the console through `Coordinator.report(_:)`, which drops repeats because
+`didFailWithError` can fire on every frame. That is the only account of a missing `.usdz`, a
+malformed `.json`, or a QR naming a model that is not in the bundle, so keep the call sites.
 
 `handTooClose` is not a debug field — it drives player-facing UI. A hand right against the lens
 crops out every joint the pinch needs, so nothing responds and nothing says why; while it holds,

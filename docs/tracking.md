@@ -204,10 +204,10 @@ own wrist out of frame and hides its knuckles, which is fine for "is there a han
 `handPoseLossTimeout` — Vision samples at 15 Hz, a dropped sample or two must not blink a model
 out, while a slightly late release of a held snail is barely noticeable.
 
-**Seeing it work.** The status panel reports both halves: a green *Hand in frame* line whenever
-presence is live, and a yellow *Locked: name* line for any card whose model is on screen without
-its card being tracked. A model that disappears when it should have locked is then two different
-bugs told apart at a glance — no hand seen (Vision), or hand seen and no lock (this rule).
+**Seeing it work.** The lock is invisible when it works — the model simply stays put — and when it
+fails the model is just gone, which could equally mean Vision never saw the hand. To tell those
+apart, print `pinch.handInFrame` alongside `pivot.isEnabled`: no hand seen is a Vision problem,
+hand seen with nothing held is this rule.
 
 The status label still reads `Entity.isAnchored` directly, so it says "not detected" while a
 locked model is on screen. That disagreement is the lock being visible in the UI, not a bug.

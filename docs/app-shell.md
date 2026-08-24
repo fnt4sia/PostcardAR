@@ -1,6 +1,7 @@
 # The app shell
 
-The SwiftUI side: the button, the camera screen, the bridge into UIKit, and the status panel.
+The SwiftUI side: the button, the camera screen, the bridge into UIKit, and how AR state reaches
+the UI.
 Written for someone who can program but has not used SwiftUI before, because most of what looks
 strange in the code is SwiftUI convention rather than anything to do with AR.
 
@@ -98,13 +99,14 @@ coordinator living outside the view hierarchy entirely, and read by the overlay.
 ```swift
 @Observable
 final class ARStatus {
-    var detectedImages: [String] = []
+    var annotatedShowcaseVisible = false
     var handTooClose = false
-    var loadedModels = 0
-    var totalImages = 0
-    var errors: [String] = []
 }
 ```
+
+Both fields draw player-facing UI. There is no debug panel — diagnostics go to the console through
+`Coordinator.report(_:)` — so a field here is a thing on screen, not a thing to look at while
+debugging.
 
 `@Observable` is a macro. At compile time it rewrites every stored property into a get/set pair
 that reports reads and writes to the Observation framework.
@@ -204,16 +206,18 @@ over, and it is worth having for a first launch on a cold device.
 private struct ScannerScreen: View {
     let library: ModelLibrary
 
-    @Environment(\.dismiss) private var dismiss
+    let close: () -> Void
+
     @State private var status = ARStatus()
     @State private var game = GameSession()
+    @State private var annotations = AnnotationLayer()
 
     var body: some View {
-        PostcardARView(status: status, game: game, library: library)
+        PostcardARView(status: status, game: game, annotations: annotations, library: library)
             .ignoresSafeArea()
-            .overlay(alignment: .top) { if showsStatusPanel { statusPanel } }
-            .overlay(alignment: .bottom) { Button("Close") { dismiss() } ... }
+            .overlay(alignment: .topLeading) { closeButton }
             .overlay { runOverlay }
+            .overlay(alignment: .bottom) { showcaseHint }
     }
 }
 ```
@@ -303,50 +307,42 @@ func makeUIView(context: Context) -> ARView {
 The struct keeps only what SwiftUI hands it (`status` and `game`). Anything else stored on it
 would be thrown away and rebuilt on the next recomputation.
 
-## Part 4 — The status panel
+## Part 4 — How AR state reaches the UI
 
 This is the one place data flows back from AR into SwiftUI, and it is worth following end to end
-because it exercises every concept above.
+because it exercises every concept above. `handTooClose` is the example: Vision decides a hand is
+too close to read a pinch from, and the camera blurs with *Move your hand away*.
 
 ```mermaid
 sequenceDiagram
     participant Cam as Camera frame
-    participant ARKit
+    participant Vision
     participant RK as RealityKit render loop
     participant Coord as Coordinator
     participant Status as ARStatus
-    participant UI as statusPanel
+    participant UI as runOverlay
 
-    Cam->>ARKit: new frame
-    ARKit->>ARKit: re-solve every visible image's pose
-    ARKit->>RK: anchor entity transforms updated
-    RK->>Coord: SceneEvents.Update
-    Coord->>Coord: per card: read anchor pose, smooth onto pivot
-    Coord->>Status: detectedImages = names where anchor.isAnchored
+    Cam->>Vision: hand-pose sample (15 Hz)
+    Vision->>Coord: joints, or nothing readable
+    RK->>Coord: SceneEvents.Update (60 Hz)
+    Coord->>Status: handTooClose = pinch.handTooClose
     Status-->>UI: Observation fires
-    UI->>UI: body recomputes
+    UI->>UI: body recomputes, blur appears
 ```
-
-`Entity.isAnchored` is precisely "ARKit is tracking this card right now" — the label answers that
-question exactly. The models on screen answer a slightly different one: a card lost while a hand
-is in frame keeps its model, locked in place, so the label can read "not detected" with a model
-still drawn — see "Tracking loss, and the occlusion lock" in [tracking.md](tracking.md). The two
-are allowed to disagree by design: the label reports tracking, the screen reports the lock.
 
 One detail that matters at 60 fps:
 
 ```swift
-if status.detectedImages != detected {
-    status.detectedImages = detected
+let handTooClose = pinch.handTooClose
+if status.handTooClose != handTooClose {
+    status.handTooClose = handTooClose
 }
 ```
 
 `@Observable` does **not** compare values before notifying. Every set is a mutation as far as
 Observation is concerned, so an unguarded assignment here would invalidate the overlay sixty times
 a second and recompute `body` on every frame, forever. Guarding the write is what keeps it to the
-handful of recomputations that correspond to real changes. The names are rebuilt into a fresh
-array each frame — cheap for a handful of cards — and the comparison, not the rebuilding, is what
-suppresses the notification.
+handful of recomputations that correspond to real changes.
 
 Everything here runs **on the main thread**: `SceneEvents.Update` fires from the render loop, and
 the session delegate uses the main queue because `session.delegateQueue` is left nil. That is why
@@ -354,34 +350,25 @@ there is no dispatching. If you ever set a custom delegate queue, the error hand
 hop back before touching UI state.
 
 Then the chain: the write hits an `@Observable` property → Observation notifies whoever read it →
-`statusPanel` read `status.detectedImages` during its last `body` → SwiftUI recomputes it → the
-label flips to green.
+`runOverlay` read `status.handTooClose` during its last `body` → SwiftUI recomputes it → the blur
+appears.
 
 No delegate protocol between the AR view and the UI, no notification centre, no manual refresh.
 The dependency was established simply by reading the property.
 
-### Why the panel reports several things
+### Diagnostics do not go through `ARStatus`
 
-Tracking detection and loading separately is deliberate. When nothing appears on screen, the first
-question is always *which half failed* — the image was never recognised, or the model never
-loaded. One combined "working / not working" flag cannot answer that.
+There was once a debug panel listing tracked images, locked models, load counts and errors. It was
+removed: it had stopped being rendered at all, and every field on `ARStatus` that existed only to
+feed it was being written sixty times a second for nobody.
 
-With several cards, both halves became counts rather than flags: which images are being tracked
-right now, and how many of the models have loaded. `errors` is a list for the same reason — a card
-whose `.usdz` is missing must not overwrite the message from the previous one. Repeats are dropped
-on the way in, because `didFailWithError` can fire on every frame and the panel is a status
-display, not a log.
+What replaced it is `Coordinator.report(_:)`, which prints to the console and drops repeats —
+`didFailWithError` can fire on every frame. It is the only account of a missing `.usdz`, a
+malformed `<name>.json`, or a QR naming a model that is not in the bundle, so keep its call sites
+even when they look unreachable.
 
-`lockedImages` and `handInFrame` were added for the same "which half failed" reason, applied to
-the occlusion lock. The lock is invisible when it works — the model simply stays put — and when it
-fails the model is just gone, which could equally mean Vision never saw the hand. Two lines in the
-panel separate those: *Hand in frame* is the lock's input, *Locked: name* is its output. The
-`lockedImages` line is only rendered while something is actually locked, so the panel stays quiet
-in normal use.
-
-The panel is hidden during `countdown`, `playing` and `finished`, where it would sit on top of
-the HUD. It stays up for `grace` on purpose: *Hand in frame* with nothing locked is exactly the
-reading needed when a model failed to hold, and the grace screen is the moment it failed.
+The rule that came out of it: **a field on `ARStatus` is something the player sees.** If you want
+to watch a value while debugging, print it.
 
 What each line means when you are staring at it is in
 [troubleshooting.md](troubleshooting.md).

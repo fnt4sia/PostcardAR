@@ -1,36 +1,40 @@
 # Troubleshooting
 
-Start with the status panel, then match the symptom.
+Start with the Xcode console, then match the symptom.
 
-## Reading the status panel
+## Reading the console
 
-The camera screen has a panel in the top corner:
+There is no on-screen debug panel. `Coordinator.report(_:)` prints everything that went wrong,
+once each, prefixed `[PostcardAR]`:
 
-| Line | Meaning |
+| Message | Means |
 |---|---|
-| **Looking for a card…** / **Detected: `name`, `name`** | Which reference images ARKit is tracking *right now*, from `Entity.isAnchored`. A model can outlive its entry: a card lost while a hand is in frame stays locked on screen — see "Tracking loss, and the occlusion lock" in [tracking.md](tracking.md). |
-| **Locked: `name`** (yellow) | That card's model is on screen while ARKit is *not* tracking its card — the occlusion lock is holding it. Absent when nothing is locked. |
-| **Hand in frame** / **No hand** | Whether Vision currently sees a hand at all, which is what the lock runs on. Looser than pinching: a hand can be present here and too poorly resolved for `evaluatePinch(ratio:at:)` to read a pinch off it. |
-| **No QR** / **QR: `name` · `n`%** | The model name last decoded from a QR, and the fraction of the last two seconds' samples that decoded anything. The percentage is the useful half — a QR is checksummed, so a name that arrives is right, and the only failure mode is a name that does not arrive. See [card-identity.md](card-identity.md). |
-| **Loading models (n/total)…** / **Models loaded (n)** | How many `.usdz` files have finished loading, one per model in the bundle. |
-| Red text | An `ARSession` error, or a model that failed to load — named, one line each. |
+| `World tracking needs a real device, not the simulator.` | `ARWorldTrackingConfiguration.isSupported` is false. |
+| `QR says "X", but there is no X.usdz.` | A payload decoded cleanly and matched no model — a typo on the card, or a file missing from the bundle. The card tracks perfectly and stays empty. |
+| `<name>.json names "…", which is not in <name>.usdz.` | An annotation entry with no matching `ANNO*` entity. |
+| `<name>.usdz has "…" with no entry in <name>.json.` | The reverse — a marker with no text. |
+| `<name>.usdz has plant points but no SingleCoral* corals to plant.` | A planting model that cannot be finished. |
+| Anything else | An `ARSession` error, or a `.usdz` that failed to load. |
 
-The panel is hidden while a run is on screen (`countdown`, `playing`, `finished`), where it would
-overlap the HUD. It is deliberately kept up for the grace screen. If you need it during a run, put
-`finished` and the rest back into `showsStatusPanel` in `ContentView.swift`.
+Silence means nothing was reported, not that everything worked.
 
-Read them together:
+For the two things that have no message — whether a card is tracked, and whether a QR decoded —
+print them from `onRenderFrame()`:
 
-- Never says *Detected* → the reference image is the problem.
-- One card detected and another never → that one image, not the app.
-- *Detected* but *No QR* → the code, not the card. It is too small, too far, or too blurred to
-  decode. Nothing will appear: a tracked card alone never summons a model.
-- *Detected* and a *QR* name, but nothing visible → the model. Still loading, missing, or loaded at
-  a scale that puts it off-screen or inside the camera.
-- Red text → the message names which file or which half failed.
+```swift
+print(anchors.contains { $0.anchor.isAnchored }, pinch.qrPayload ?? "no QR")
+```
 
-A large `.usdz` can take several seconds, and they load one after another, so the count climbs
-rather than jumping. *Models loaded* is what tells you the queue is done.
+Read the pair together:
+
+- Never tracked → the reference image is the problem.
+- Tracked but no payload → the code, not the card. Too small, too far, or too blurred to decode.
+  Nothing will appear: a tracked card alone never summons a model.
+- Tracked and a payload, but nothing visible → the model. Still loading, missing, or loaded at a
+  scale that puts it off-screen or inside the camera.
+
+A large `.usdz` takes several seconds and they load one after another, so `LoadingView`'s count
+climbs rather than jumping.
 
 ## Symptoms
 

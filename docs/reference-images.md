@@ -16,7 +16,7 @@ In Xcode:
 1. Open `Assets.xcassets` and select **AR Resources**.
 2. Drag the card's image (PNG or JPG) into it.
 3. Name the entry whatever you like. **The name is not matched against anything** — it appears on
-   the status panel and nowhere else. Which model stands on a card, and whether that card runs a
+   nowhere in the app. Which model stands on a card, and whether that card runs a
    minigame, is decided by the QR printed on it; see [card-identity.md](card-identity.md).
 4. In the Attributes Inspector, set the **physical size** of the printed card. For a standard A6
    postcard that is 148 × 105 mm. Xcode fills in the second dimension from the aspect ratio.

@@ -112,10 +112,10 @@ that card's `modelWidths` entry under about 0.14 so the model fits on its floor.
 | Model is a strange size | It isn't authored scale: `fit(_:named:)` sizes every model to a fixed target width, so that's irrelevant. Tune that card's entry in `modelWidths` instead. |
 | Camera freezes, no error | The `.usdz` brought a camera from Blender. Stripped automatically at load; see [docs/models.md](docs/models.md). |
 | Everything stutters | Model weight. Budget 512² textures and under ~50k triangles, *shared* across all cards — every model loads at launch and stays resident. |
-| A card with no `.usdz` | Tracks fine, shows nothing, and the status panel names the missing file. A QR naming a model that is not in the bundle says so outright. |
-| A card tracks but stays empty | Its QR is not decoding. The status panel's `QR:` line gives the rate; if it never appears, the code is too small or too far for the camera — see [docs/card-identity.md](docs/card-identity.md). |
-| No minigame on a card | Either it is a showcase card — only a QR payload starting `Simulation` runs one — or the model has no `Drupella*` or `CoralPlantPoint*` entities in it, which the status panel says outright. |
-| Annotations do not appear | Panels start closed — tap the dot on the model to open one. If there is no dot either, the entity name in the `.usdz` and the `"entity"` in the `.json` have to match exactly; every mismatch is named in the status panel — see [docs/annotations.md](docs/annotations.md). |
+| A card with no `.usdz` | Tracks fine, shows nothing, and the Xcode console names the missing file. A QR naming a model that is not in the bundle says so outright. |
+| A card tracks but stays empty | Its QR is not decoding — the code is too small, too far, or too blurred. A tracked card alone never summons a model; see [docs/card-identity.md](docs/card-identity.md). |
+| No minigame on a card | Either it is a showcase card — only a QR payload starting `Simulation` runs one — or the model has no `Drupella*` or `CoralPlantPoint*` entities in it, which the console says outright. |
+| Annotations do not appear | Panels start closed — tap the dot on the model to open one. If there is no dot either, the entity name in the `.usdz` and the `"entity"` in the `.json` have to match exactly; every mismatch is named in the console — see [docs/annotations.md](docs/annotations.md). |
 | A coral will not snap onto a plant point | Carry it at least `plantArmDistance` from where you grabbed it, then bring it within `plantSnapRadius` (80 screen points) of a free point on its own structure. |
 | Nothing shows where corals should go | Add a `CoralPlate_NN` to your model beside each `CoralPlantPoint_NN`. The app pulses it while the slot is free and holds it solid when a held coral is about to land there; it draws nothing itself. |
 | The run restarted from zero | The card left frame with no hand in it for more than 3 seconds. Inside 3 seconds the score and clock are held; keeping a hand in frame holds the model indefinitely. |
@@ -167,11 +167,11 @@ The camera permission string lives in the build settings as
 | [docs/models.md](docs/models.md) | `.usdz` assets: naming, scaling to the card, weight budget, what else is in an export |
 | [docs/tracking.md](docs/tracking.md) | ARKit and RealityKit: the session, anchors, the entity hierarchy, the render loop |
 | [docs/smoothing.md](docs/smoothing.md) | Why the models hold still, and the three constants that tune it |
-| [docs/app-shell.md](docs/app-shell.md) | SwiftUI from scratch: views, state, the UIKit bridge, the status panel |
+| [docs/app-shell.md](docs/app-shell.md) | SwiftUI from scratch: views, state, the UIKit bridge, the screen flow |
 | [docs/interaction.md](docs/interaction.md) | Pinch pickup: Vision hand-pose sampling, grab/drag/release |
 | [docs/simulation.md](docs/simulation.md) | Showcase vs Simulation cards, which minigame a model is, both games' rules, the run's phases and clocks |
 | [docs/annotations.md](docs/annotations.md) | Explanation labels: the `ANNO*`/JSON pairing, the ring layout, and why a panel is a texture rather than a SwiftUI view |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom → cause, starting from the status panel |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom → cause, starting from the Xcode console |
 
 `CLAUDE.md` is the working agreement for AI-assisted changes to this repo — the invariants that
 must not be broken, and the house rules.

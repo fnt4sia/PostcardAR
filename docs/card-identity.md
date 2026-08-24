@@ -163,10 +163,8 @@ capture is far too expensive to run continuously and does not have to be.
 
 Two things keep it honest:
 
-- **It does not feed `decodeRate`.** That window is a statistic about the video stream, answering
-  "is a code this size readable during normal running" — which is the question the printed card's
-  design turns on. Folding occasional still frames in would report a code as fine at a size the
-  stream can never read.
+- **Misses are not fed to it.** A still scan that found nothing says only that the card was not
+  pointed at a code yet; the video sampler is already ageing `payload` out on its own clock.
 - **The video format is only upgraded if it is free.** Not every format's still pipeline beats its
   stream, so `start(in:)` switches to
   `recommendedVideoFormatForHighResolutionFrameCapturing` when the default is not one — but only
@@ -178,24 +176,20 @@ primary camera is used for tracking, which under `ARWorldTrackingConfiguration` 
 and focus cannot be tuned for the code — autofocus hunting shows up as blur, and blur is not
 something more pixels fix.
 
-## Reading the status panel
+## When nothing appears
 
-Two separate lines, so a failure can be attributed:
+A model needs **both** halves of the split, so an empty screen has two causes that look identical
+on camera. Print them to tell the two apart: `anchors.contains { $0.anchor.isAnchored }` is the
+pose half, `pinch.qrPayload` the identity half. A tracked card alone never summons a model.
 
-| Line | Means |
-|---|---|
-| `Detected: …` | reference images ARKit is tracking — **anchors**, not models. Under this split a tracked image no longer implies anything is drawn on it. |
-| `QR: <name> · N%` | the decoded model name, and the fraction of the last two seconds' samples that decoded anything |
-
-The percentage is the number that matters, and it is reported precisely because nothing else can
-tell you it is low. A QR carries its own error correction, so a payload that decodes at all has
-passed a checksum — a *wrong* name is close to impossible and the only failure mode is *no* name.
-Sustained high means identity can live here; intermittent means the code is being asked to decode
-at a size, distance or motion blur it cannot, and no amount of wiring downstream will fix that.
+A QR carries its own error correction, so a payload that decodes at all has passed a checksum — a
+*wrong* name is close to impossible, and the only failure mode is *no* name. If the payload never
+arrives, the code is being asked to decode at a size, distance or motion blur it cannot, and no
+amount of wiring downstream will fix that.
 
 `QR says "X", but there is no X.usdz.` is a payload that decoded cleanly and matched no model — a
-code printed with a typo, or one naming a file that is not in the bundle. Worth an error line
-because the symptom is otherwise a card that tracks perfectly and stays empty.
+code printed with a typo, or one naming a file that is not in the bundle. It prints because the
+symptom is otherwise a card that tracks perfectly and stays empty.
 
 ## Known limits
 
@@ -206,17 +200,14 @@ Both follow from there being one payload and one binding.
   the code's four corner points, so the fix is to project each anchor's position into the image and
   match each payload to the nearest — it simply is not done yet.
 - **Swapping one card for another** draws the outgoing model on the incoming card until the new QR
-  reads, bounded by `payloadHoldSamples` (about a second).
+  reads, bounded by `payloadHoldSamples` (three seconds). Only visible when the anchor stays
+  tracked across the swap; with a reference image per card it drops and the model hides anyway.
 
 ## Tuning
 
-Both in `QRCardIdentity.swift`, and they must not be merged — one is a statistic being reported,
-the other is state the app acts on.
-
 | Constant | Default | Does |
 |---|---|---|
-| `decodeRateWindow` | 30 samples (2 s) | how far back `decodeRate` averages |
-| `payloadHoldSamples` | 15 samples (1 s) | how long a name survives after the last sample that read it |
+| `payloadHoldSamples` | 45 samples (3 s) | how long a name survives after the last sample that read it |
 
 `highResolutionScanInterval` (1 s) lives in `PinchInteraction.swift`, beside the sampler it
 escalates from.

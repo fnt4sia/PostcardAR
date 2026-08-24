@@ -109,10 +109,8 @@ private struct AnnotationText: Decodable {
 /// card, are occluded by the model and by hands, and shrink with distance.
 ///
 /// RealityKit on iOS cannot host a SwiftUI view in a scene — `ViewAttachmentComponent` is
-/// visionOS-only, confirmed absent from the iOS SDK — so a panel is a quad wearing a texture of the
-/// label, rendered from the very same `AnnotationBox` view by `ImageRenderer`. The alternative,
-/// `MeshResource.generateText`, builds an extruded glyph mesh per string with no background, no
-/// wrapping worth the name, and a rebuild on every edit.
+/// visionOS-only — so a panel is a quad wearing a texture rendered from `AnnotationBox` by
+/// `ImageRenderer`. See docs/annotations.md.
 @MainActor
 final class AnnotationLayer {
     /// One built annotation: the dot that is tapped, and the two entities that appear when it is.
