@@ -1,6 +1,7 @@
 # Simulation cards and the run
 
-A card is one of two kinds, and the kind is the front of its name:
+A card is one of two kinds, and the kind is the front of the name its QR carries — which is also
+its `.usdz`'s name. See [card-identity.md](card-identity.md).
 
 | Kind | Prefix | What it does |
 |---|---|---|
@@ -13,14 +14,15 @@ private let simulationCardPrefix = "Simulation"
 kind: name.hasPrefix(simulationCardPrefix) ? .simulation : .showcase
 ```
 
-The type travels in the name for the same reason the model does: adding a card stays two files
-and no code change, and nothing in the source names an individual card. It is the same idiom as
-the `Drupella` prefix that `PinchInteraction.collect(from:named:report:)` matches on. `Showcase` as
-a prefix is a convention for readability only — the code tests for `Simulation` and treats
-everything else as showcase, so an unprefixed card is a showcase card.
+The type travels in the name for the same reason the model does: adding a card stays a model and a
+QR, no code change, and nothing in the source names an individual card. It is the same idiom as the
+`Drupella` prefix that `PinchInteraction.collect(from:named:report:)` matches on. `Showcase` as a
+prefix is a convention for readability only — the code tests for `Simulation` and treats everything
+else as showcase, so an unprefixed card is a showcase card.
 
-Renaming a card to change its kind means renaming its `.usdz` too; the pairing is still by exact
-name. See [reference-images.md](reference-images.md) and [models.md](models.md).
+Changing a card's kind means renaming its `.usdz` and reprinting its QR to match; the pairing is
+still by exact name. The *reference image* is not involved and does not need renaming — it carries
+no identity any more. See [card-identity.md](card-identity.md) and [models.md](models.md).
 
 ## What the two kinds actually differ in
 

@@ -155,6 +155,11 @@ private let handTooCloseSegmentFraction: CGFloat = 0.30
 /// that is not too close clears it immediately, so the warning cannot outlive its cause.
 private let handTooCloseConfirmSamples = 5
 
+/// How often `scanForQRAtHighResolution()` may fire while no card is bound. A still capture is
+/// far more expensive than a video frame, and one success ends the escalation for that card, so
+/// this is paced for "keep trying quietly" rather than for latency.
+private let highResolutionScanInterval: TimeInterval = 1.0
+
 /// Adjacent joints along each finger, tip inward. Only *neighbouring* pairs are ever measured, and
 /// the wrist is deliberately absent: it is the first thing to leave the frame as a hand approaches
 /// the lens, which is precisely when this measurement has to keep working.
@@ -346,6 +351,13 @@ final class PinchInteraction {
         return request
     }()
 
+    /// The card name read off a QR in the same sample as the hand pose — see `QRCardIdentity`.
+    private var qr = QRCardIdentity()
+
+    /// Guards the one-off high-resolution scan against overlapping itself, and paces it.
+    private var highResolutionTaskInFlight = false
+    private var lastHighResolutionScan = Date.distantPast
+
     /// Guards against overlapping inference and paces sampling to `handPoseSampleInterval`.
     private var handPoseTaskInFlight = false
     private var lastHandPoseSampleTime = Date.distantPast
@@ -414,6 +426,51 @@ final class PinchInteraction {
     /// Written once per sample rather than derived from timestamps, so "no hand" is answered by
     /// the absence of a hand in *this* sample instead of by a clock that has not run out yet.
     private(set) var handTooClose = false
+
+    /// The card name last read off a QR in the camera frame, and how often one is coming through.
+    ///
+    /// The payload is acted on — `Coordinator.rebind(to:)` binds the model it names to whichever
+    /// anchor is tracked, and it is half the latch that may turn a pivot on. The rate is reported
+    /// to the status panel and acted on by nothing. Surfaced through here because this class owns
+    /// the sampler the read shares — see `QRCardIdentity`.
+    var qrPayload: String? { qr.payload }
+    var qrDecodeRate: Double { qr.decodeRate }
+
+    /// Asks the session for one full-resolution frame and looks for a QR in it.
+    ///
+    /// The photo pipeline hands back something like 4032 px across where the video stream gives
+    /// 1920, and QR decoding is bounded by pixels per module, so this reads a code at roughly
+    /// half the printed size the video stream needs. It costs a still capture, so it is not
+    /// something to run continuously.
+    ///
+    /// **It does not have to be.** A card's binding survives the payload that made it, so one
+    /// successful decode is enough for the whole time that card is in play — the coordinator
+    /// calls this only while nothing is bound and an anchor is tracked, and stops the moment a
+    /// model appears. See `docs/card-identity.md`.
+    ///
+    /// The `ARFrame` is not stored: only `capturedImage` outlives this scope, for the same
+    /// ARFrame-retention reason the render loop avoids `session(_:didUpdate:)`.
+    func scanForQRAtHighResolution() {
+        guard !highResolutionTaskInFlight,
+              Date().timeIntervalSince(lastHighResolutionScan) >= highResolutionScanInterval,
+              let arView
+        else { return }
+
+        lastHighResolutionScan = Date()
+        highResolutionTaskInFlight = true
+
+        let interfaceOrientation = arView.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
+        let imageOrientation = CGImagePropertyOrientation(rearCameraFor: interfaceOrientation)
+        let session = arView.session
+
+        Task { @MainActor in
+            defer { highResolutionTaskInFlight = false }
+            guard let frame = try? await session.captureHighResolutionFrame() else { return }
+            let observations = try? await QRCardIdentity.request
+                .perform(on: frame.capturedImage, orientation: imageOrientation)
+            qr.noteHighResolution(observations ?? [])
+        }
+    }
 
     /// Consecutive samples that read as too close — see `handTooCloseConfirmSamples`.
     private var tooCloseStreak = 0
@@ -757,7 +814,18 @@ final class PinchInteraction {
             // Explicit orientation hint: Vision rotates internally and hands back joints
             // already in the upright image's coordinate space, which the aspect-fill math
             // below expects.
-            let hand = try? await handPoseRequest.perform(on: pixelBuffer, orientation: imageOrientation).first
+            //
+            // Both requests go through one `ImageRequestHandler` rather than one
+            // `perform(on:)` each: the handler ingests the pixel buffer once and runs both
+            // models against it, so reading the QR costs no second in-flight task and does not
+            // halve the hand-pose rate that `handPoseLossTimeout` and the occlusion lock are
+            // tuned against. Adding a second sampler alongside this one would do both.
+            let handler = ImageRequestHandler(pixelBuffer, orientation: imageOrientation)
+            let results = try? await handler.perform(handPoseRequest, QRCardIdentity.request)
+            let hand = results?.0.first
+            // Noted every sample, including the ones that read nothing — `decodeRate` is a
+            // fraction of samples taken, so skipping the misses would peg it at 100%.
+            qr.note(results?.1 ?? [])
 
             // Presence is a far looser question than pinching, and has to be asked first. A
             // hand held flat over a card — the case the occlusion lock exists for — is

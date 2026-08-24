@@ -70,9 +70,10 @@ RealityKit finds the matching `ARImageAnchor` and copies its transform into the 
 continuously. So "the model follows the card" costs no code at all — it is parenting. Rotate the
 card, ARKit updates the anchor, the descendants inherit it.
 
-The name is not a constant in the source. It comes from the reference image itself, and the same
-string loads the model (`Entity(named: card.name)` finds `<name>.usdz` in the bundle). That
-single convention is the entire registration mechanism.
+The name is not a constant in the source; it comes from the reference image itself. It no longer
+loads a model, though — an image says only *where* a card is. Which `.usdz` stands on it is decided
+by a QR printed on the card, whose payload is the model's name. See
+[card-identity.md](card-identity.md).
 
 ## One branch per card
 
@@ -101,14 +102,18 @@ enabled draws its model at the world origin (wherever the session started) from 
 drive too: pivots are created with `isEnabled = false`, and the render loop turns each one on and
 off with its own card's `isAnchored`. See "Tracking loss" below.
 
-There is one `anchor`/`pivot`/model triple per reference image, and they are independent: each
-has its own filter state. All of them are built and added to the scene at startup, because an
-image anchor is inert until ARKit tracks its image — an off-camera card costs nothing.
+**Anchors and pivots are counted separately.** There is one anchor per reference image, built and
+added to the scene at startup — an image anchor is inert until ARKit tracks its image, so an
+off-camera card costs nothing. There is one pivot per `.usdz` in the bundle, and it is empty until
+a QR names it. The two are joined at runtime by whichever payload is decoded, which is what lets
+several printed cards share one reference image.
 
-The coordinator keeps them in an array of small `Card` structs (name, printed width, anchor,
-pivot, `heldPose`). The entities inside are classes, so copying a `Card` still refers to the same
-anchor and pivot; only `heldPose` genuinely lives in the struct, which is why the per-frame loop
-writes through `cards[index]` rather than through a loop variable.
+The coordinator keeps them in two arrays of small structs — `CardAnchor` (image name, printed size,
+anchor) and `Card` (model name, kind, pivot, `heldPose`) — plus `bound`, the pair a payload joins.
+The entities inside are classes, so copying a struct still refers to the same anchor and pivot;
+`heldPose` and the attachment flags genuinely live in the struct, which is why the per-frame loop
+writes through `cards[index]` rather than through a loop variable. See
+[card-identity.md](card-identity.md).
 
 ## Never write to an anchor
 
@@ -150,20 +155,29 @@ is therefore driven by hand, once per rendered frame, from two facts:
 ```swift
 let handInFrame = pinch.handInFrame
 let isSimulation = cards[index].kind == .simulation
-let visible = tracked || (cards[index].pivot.isEnabled && handInFrame && isSimulation)
+let named = pinch.qrPayload == cards[index].name
+let visible = (tracked && named)
+    || (cards[index].pivot.isEnabled && (tracked || (handInFrame && isSimulation)))
 ```
 
 `pinch.handInFrame` (`held != nil || Date().timeIntervalSince(lastHandSeenTime) <
 handPresenceTimeout`) lives in `PinchInteraction` — see [interaction.md](interaction.md) — and is
 the one piece of pinch state the coordinator reads back.
 
-Read it as three rules, for a **simulation** card:
+`named` is the QR half, and it gates *switching a pivot on* rather than keeping it on — a card
+alone never summons a model, but once the code has been read the model rides the card whether or
+not it stays legible. That asymmetry is deliberate and load-bearing: the hand that covers the card
+covers the code too. See [card-identity.md](card-identity.md).
 
-| Card tracked | Hand in frame | Model |
-|---|---|---|
-| yes | either | drawn, pose updated |
-| no | yes, and it was already showing | **locked** — stays exactly where it was, pose frozen |
-| no | no | hidden |
+Read it as four rules, for a **simulation** card:
+
+| Card tracked | QR names this card | Hand in frame | Model |
+|---|---|---|---|
+| yes | yes | either | drawn, pose updated |
+| yes | no, but it was already showing | either | drawn, pose updated |
+| yes | no, and it was not showing | either | hidden |
+| no | either | yes, and it was already showing | **locked** — stays exactly where it was, pose frozen |
+| no | either | no | hidden |
 
 A **showcase** card has only the first and last rows: it hides the instant its card is lost,
 whatever the hand is doing. The lock exists so that reaching into the scene does not delete the
