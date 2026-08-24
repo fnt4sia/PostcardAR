@@ -602,12 +602,12 @@ final class PinchInteraction {
             .min { $0.1 < $1.1 }?.0
     }
 
+    /// A matched entity is a whole unit — a snail, a plant point — not a tree to keep searching.
+    /// `Drupella_01`'s own mesh child is named `DrupellaMesh_008`, so recursing past a match would
+    /// count that mesh as a second snail: 8 snails read back as 16.
     private func find(prefix: String, in entity: Entity) -> [Entity] {
-        var found = entity.name.hasPrefix(prefix) ? [entity] : []
-        for child in entity.children {
-            found.append(contentsOf: find(prefix: prefix, in: child))
-        }
-        return found
+        if entity.name.hasPrefix(prefix) { return [entity] }
+        return entity.children.flatMap { find(prefix: prefix, in: $0) }
     }
 
 
