@@ -24,7 +24,9 @@ one.
    `docs/interaction.md`. **Tap**, on the screen, opens or closes an annotation panel and does
    nothing else at all. Neither moves, selects or otherwise disturbs a model.
 8. A model of either kind may carry `ANNO*` entities, which build explanation labels — billboarded
-   panels in the scene — from a `.json` file of the same name as the card. See `docs/annotations.md`.
+   panels in the scene — from a `.json` file of the same name as the card. **One panel is open at a
+   time, and every panel opens in the same place: centred above the model.** See
+   `docs/annotations.md`.
 
 Adding a card is a `.usdz` in `PostcardAR/` and a QR carrying its name — no catalog entry of its
 own, and no code change; a second file, `<name>.json`, if it has annotations. Any reference image
@@ -35,7 +37,7 @@ in the group will carry it. Nothing in the source names an individual card.
 | Name | Means |
 |---|---|
 | `Simulation*` (QR payload / `.usdz`) | runs a minigame; anything else is a showcase card |
-| `ANNO*` | a point to hang an explanation label on; its panel is built into the scene on a ring around the model, closed until its dot is tapped |
+| `ANNO*` | a point to hang an explanation label on; its panel is built into the scene above the model, closed until its dot is tapped, and only one is ever open |
 | `Drupella*` | a grabbable snail; `*_Outline` is its outline mesh |
 | `CoralPlantPoint*` | a slot a coral can be planted into — and the marker that a model *is* the planting game |
 | `CoralPlate*` | optional; the visible socket for the point of the same number, pulsed while that slot is free |
@@ -99,7 +101,7 @@ Documentation is split by area, and each file owns its topic:
 | `docs/app-shell.md` | SwiftUI, the `UIViewRepresentable` bridge, the screen flow, type and Dynamic Type |
 | `docs/interaction.md` | Pinch pickup: Vision hand-pose sampling, grab/drag/release, tuning |
 | `docs/simulation.md` | Card kinds, which minigame a model is, both games' rules, the run's phases and clocks, scoring |
-| `docs/annotations.md` | Explanation labels: the `ANNO*`/JSON pairing, the ring layout, and why a panel is a texture rather than a SwiftUI view |
+| `docs/annotations.md` | Explanation labels: the `ANNO*`/JSON pairing, where a panel is placed, and why it is a texture rather than a SwiftUI view |
 | `docs/troubleshooting.md` | Symptom → cause, starting from the Xcode console |
 
 The Xcode target uses a synchronized folder group, so any file added under `PostcardAR/`

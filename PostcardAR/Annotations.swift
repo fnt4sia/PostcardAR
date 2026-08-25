@@ -11,7 +11,8 @@
 //  with no such entities, or a card with no JSON file, simply has no annotations.
 //
 //  Each annotation becomes three entities parented to the card's pivot — a dot on the point, a
-//  billboarded panel out on a ring around the model, and a leader line joining them. They are
+//  billboarded panel centred above the model, and a leader line joining them. One panel is open at
+//  a time, and every panel opens in that same place — see `build` and `toggle`. They are
 //  built **once**, at load, and then RealityKit owns them: they move, tilt, hide and lock with the
 //  card like the model does, and `BillboardComponent` keeps the panels facing the camera. There is
 //  no per-frame work here at all.
@@ -46,12 +47,29 @@ private let annotationBoxMaxWidth: CGFloat = 150
 private let annotationRenderScale: CGFloat = 3
 
 /// How many metres one laid-out point is worth — the dial that turns the rendered label into a
-/// panel size. At 150 pt wide this gives a panel about 10.5 cm across, against a model sized to
-/// 0.3 m by `modelWidths`. **Raise it to make every label bigger.**
-private let annotationMetresPerPoint: Float = 0.0007
+/// panel size. **Raise it to make every label bigger.**
+///
+/// The rendered image is `annotationBoxMaxWidth` plus its 10 pt of horizontal padding either side,
+/// so 170 pt; at this value that is a panel **7.7 cm** wide. Against `Showcase_Coral`, which
+/// `modelWidths` sizes to 13 cm, the label reads at about 60% of the model's width.
+///
+/// Brought down from 0.0007, which made the panel 11.9 cm — 92% of the model, near enough to the
+/// same size as the thing it was labelling. That was tolerable while panels sat out on a ring
+/// beside the model and merely felt crowded; once they moved to a single spot directly above it,
+/// a panel that wide dominated the whole scene.
+///
+/// There is legibility headroom below this. The body is `.caption2`, about 11 pt in a 170 pt box,
+/// so glyphs are ~5 mm tall here — roughly 43 arcmin at a 40 cm viewing distance, against the
+/// ~20 arcmin that is comfortable to read, and the texture is supersampled `annotationRenderScale`
+/// times so it stays sharp close up.
+private let annotationMetresPerPoint: Float = 0.00045
 
-/// How far beyond the model's own silhouette the ring of panels sits, in metres.
-private let annotationRingMargin: Float = 0.05
+/// Gap between the top of the model and the bottom edge of an open panel, in metres.
+///
+/// The panel hangs **above** the model rather than out beside it, and that is the whole placement
+/// rule — see `build(_:from:in:named:report:)` for why above is the only spot that works from every
+/// angle.
+private let annotationPanelClearance: Float = 0.02
 
 /// Thickness of a leader line, in metres.
 private let annotationLeaderThickness: Float = 0.0018
@@ -173,10 +191,32 @@ final class AnnotationLayer {
         guard let (index, _) = nearest else { return false }
 
         let showing = !markers[index].panel.isEnabled
-        markers[index].panel.isEnabled = showing
-        markers[index].leader?.isEnabled = showing
+
+        // **One open at a time.** Tapping a second dot puts the first one away rather than adding
+        // to it, so the reader is always looking at exactly one label and never has to tidy up
+        // after themselves. It is also what lets every panel share a single position — see
+        // `build(_:from:in:named:report:)`; two open at once there would sit exactly on top of
+        // each other.
+        //
+        // Swept across every card's markers, not just this one's. The pool is flat and only one
+        // card is ever bound, so in practice these are all the same card's — but a stale panel
+        // left enabled on a card that has since been unbound would come back the next time that
+        // card did, which is not something the reader asked for.
+        for other in markers.indices where other != index {
+            setOpen(false, at: other)
+        }
+        setOpen(showing, at: index)
+
         tapHaptics.impactOccurred()
         return true
+    }
+
+    /// Shows or hides one marker's panel and its leader line together — they are never one without
+    /// the other, and a line to a panel that is not there is the bug this exists to prevent.
+    private func setOpen(_ open: Bool, at index: Int) {
+        guard markers[index].panel.isEnabled != open else { return }
+        markers[index].panel.isEnabled = open
+        markers[index].leader?.isEnabled = open
     }
 
     /// Warms the Taptic Engine, so the first tap of a session is not the slow one. Called when the
@@ -242,45 +282,52 @@ final class AnnotationLayer {
         return !matched.isEmpty
     }
 
-    /// Lays the panels out on a ring around the model and builds the entities.
+    /// Builds each annotation's dot, panel and leader line, and puts every panel in the same place:
+    /// centred above the model.
     ///
     /// **Panels are not built at their markers.** On an anatomy model the markers are wherever the
-    /// anatomy is, and the anatomy is small: `Showcase_Coral.usdz` puts six of its nine within a
-    /// couple of millimetres of each other, so panels built in place would interpenetrate into one
-    /// unreadable clump. Each is pushed out to a ring instead, with a leader line back to its point.
+    /// anatomy is, and the anatomy is small: `Showcase_Coral.usdz` puts its nine within a couple of
+    /// centimetres of each other once the model is scaled to 13 cm, so panels built in place would
+    /// interpenetrate into one unreadable clump. Each is pushed clear, with a leader line back to
+    /// its point.
     ///
-    /// The ring is around the model's **vertical axis**, and that is the part worth keeping. Pushing
-    /// panels apart only within the card's plane looks right from one side and collapses from the
-    /// other; spreading them by angle means that from wherever the phone happens to be, some panels
-    /// are in front of the model and some behind, and walking around reveals the rest. Angles are
-    /// assigned by marker height so the ring spirals up the model rather than crowding one band, and
-    /// each panel keeps its own marker's height so its leader line stays roughly horizontal.
+    /// **Above the model, and the same spot for every one of them.** This replaced a ring of panels
+    /// spread by angle around the model's vertical axis, which measured out badly on the one card
+    /// that uses it: at a 13 cm model the ring radius is 11.5 cm, which leaves 8.0 cm of arc between
+    /// nine panels that are each 10.5 cm wide — so they overlapped anyway — and spread them over
+    /// nine different heights while it did it. Worse, a ring puts roughly half the panels *behind*
+    /// the model from wherever the phone happens to be, so tapping a dot could open a label into the
+    /// far side of the coral. Position that depends on where you are standing is exactly what reads
+    /// as random.
+    ///
+    /// Above the model is the one region nothing can occlude, from any angle, without any per-frame
+    /// work to keep it there. Every panel going to the *same* point above it is then not a
+    /// compromise but the point: a reader who taps four dots in a row sees the label appear in the
+    /// same place four times, and only the leader line moves to say which part they picked.
+    ///
+    /// This only works because a single panel is open at a time — see `toggle(at:in:)`. The two
+    /// changes are one change: without it, nine panels would stack on the same coordinate.
     private func build(_ items: [(entity: Entity, title: String, detail: String)],
                        from model: Entity, in container: Entity, named name: String,
                        report: (String) -> Void) {
         guard !items.isEmpty else { return }
 
         let bounds = model.visualBounds(relativeTo: container)
-        let radius = max(bounds.extents.x, bounds.extents.z) / 2 + annotationRingMargin
 
-        // Sorted by height, with the name breaking ties, so the ring is stable and reproducible
-        // rather than following whatever order the JSON happened to be written in.
-        let ordered = items
-            .map { (item: $0, position: $0.entity.position(relativeTo: container)) }
-            .sorted { ($0.position.y, $0.item.entity.name) < ($1.position.y, $1.item.entity.name) }
-
-        let step = 2 * Float.pi / Float(ordered.count)
-
-        for (index, entry) in ordered.enumerated() {
-            guard let panel = Self.panel(title: entry.item.title, detail: entry.item.detail) else {
-                report("Could not render the label for \(entry.item.entity.name) on \(name).")
+        for item in items {
+            guard let panel = Self.panel(title: item.title, detail: item.detail) else {
+                report("Could not render the label for \(item.entity.name) on \(name).")
                 continue
             }
 
-            let angle = step * Float(index)
-            let target = SIMD3<Float>(bounds.center.x + radius * cos(angle),
-                                      entry.position.y,
-                                      bounds.center.z + radius * sin(angle))
+            let markerPosition = item.entity.position(relativeTo: container)
+
+            // Centred over the model horizontally, and lifted so the panel's *bottom edge* clears
+            // its top by `annotationPanelClearance` — hence the half-height, which is why `panel`
+            // reports the height it wrapped to rather than only its width.
+            let target = SIMD3<Float>(bounds.center.x,
+                                      bounds.max.y + annotationPanelClearance + panel.height / 2,
+                                      bounds.center.z)
 
             panel.entity.position = target
             // Always face the camera. Without this a panel is readable from one angle and edge-on
@@ -293,10 +340,14 @@ final class AnnotationLayer {
             panel.entity.isEnabled = false
             container.addChild(panel.entity)
 
-            let dot = Self.dot(at: entry.position)
+            let dot = Self.dot(at: markerPosition)
             container.addChild(dot)
 
-            let leader = Self.leader(from: entry.position, to: target, clearing: panel.width / 2)
+            // Cleared by half the panel's *larger* side. The panel billboards, so which of its two
+            // dimensions faces the line depends on where the reader is standing; the larger one is
+            // the only clearance that holds from every angle.
+            let leader = Self.leader(from: markerPosition, to: target,
+                                     clearing: max(panel.width, panel.height) / 2)
             if let leader {
                 leader.isEnabled = false
                 container.addChild(leader)
@@ -308,13 +359,18 @@ final class AnnotationLayer {
 
     // MARK: Building the pieces
 
-    /// A quad wearing a texture of `AnnotationBox`, and how wide it ended up in metres.
+    /// A quad wearing a texture of `AnnotationBox`, and how big it ended up in metres.
     ///
     /// The height is not chosen: `ImageRenderer` lays the view out at `annotationBoxMaxWidth` and
     /// reports whatever pixel size the text wrapped to, and the quad takes that aspect ratio. So a
     /// two-line body and a four-line body both come out correctly proportioned with no constant to
     /// keep in step — which is exactly what a fixed row height could not do.
-    private static func panel(title: String, detail: String) -> (entity: ModelEntity, width: Float)? {
+    ///
+    /// Both dimensions are reported because both are needed: the height decides how far the panel
+    /// is lifted so its bottom edge clears the model, and the larger of the two is the leader
+    /// line's clearance.
+    private static func panel(title: String, detail: String)
+        -> (entity: ModelEntity, width: Float, height: Float)? {
         let renderer = ImageRenderer(content: AnnotationBox(title: title, detail: detail))
         renderer.scale = annotationRenderScale
         renderer.isOpaque = false // the box has rounded corners; the rest must stay transparent
@@ -337,7 +393,7 @@ final class AnnotationLayer {
         // panel would dim in a dim room, which is precisely when the label needs to stay legible.
 
         let entity = ModelEntity(mesh: .generatePlane(width: width, height: height), materials: [material])
-        return (entity, width)
+        return (entity, width, height)
     }
 
     /// The dot left on the marker point itself.

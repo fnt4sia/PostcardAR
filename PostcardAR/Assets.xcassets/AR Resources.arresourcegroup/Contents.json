@@ -5,13 +5,7 @@
   },
   "resources" : [
     {
-      "filename" : "borderSimDrupella-5.arreferenceimage"
-    },
-    {
-      "filename" : "Simulation_Coral.arreferenceimage"
-    },
-    {
-      "filename" : "Simulation_Drupella.arreferenceimage"
+      "filename" : "QRSimulationDrupellaCard.arreferenceimage"
     }
   ]
 }

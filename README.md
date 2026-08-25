@@ -87,7 +87,7 @@ case-sensitive, and anything unmatched is scenery:
 
 | Name it | To get |
 |---|---|
-| `ANNO*` | An explanation label pinned to that point, with text from `<card name>.json`. A dot appears on the model; tap it and a panel opens in the scene, on a ring around the model, with a line back to the point. Works on any card — see [docs/annotations.md](docs/annotations.md). |
+| `ANNO*` | An explanation label pinned to that point, with text from `<card name>.json`. A dot appears on the model; tap it and a panel opens in the scene, centred above the model, with a line back to the point. One panel is open at a time — tapping another dot closes the first. Works on any card — see [docs/annotations.md](docs/annotations.md). |
 | `Drupella*` | A snail to pinch off. A model with these runs the **removal** minigame. |
 | `CoralPlantPoint*` | A slot to plant a coral into. A model with these runs the **planting** minigame. Keep its rotation unbaked and planted corals adopt it. |
 | `CoralPlate*` | Optional. The visible socket for the point of the same number — `CoralPlate_03` goes with `CoralPlantPoint_03`. The app pulses it while that slot is free. |

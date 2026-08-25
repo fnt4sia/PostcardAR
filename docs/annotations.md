@@ -116,6 +116,18 @@ longest body in the file.
 `annotationMetresPerPoint` converts the laid-out size into world size, and is the one dial for how
 big every label is.
 
+The rendered image is `annotationBoxMaxWidth` plus 10 pt of horizontal padding either side — 170 pt
+— so at the current 0.00045 a panel is **7.7 cm** wide, about 60% of the 13 cm `modelWidths` gives
+`Showcase_Coral`. It came down from 0.0007, which made the panel 11.9 cm: 92% of the model, near
+enough the same size as the thing it labelled. That was survivable while panels sat out on a ring
+beside the model and merely felt crowded; once they moved to a single spot directly above it, a
+panel that wide dominated the scene.
+
+There is headroom below this before legibility suffers. The body is `.caption2`, about 11 pt in a
+170 pt box, so glyphs are ~5 mm tall — roughly 43 arcmin at a 40 cm viewing distance against the
+~20 arcmin that reads comfortably — and the texture is supersampled `annotationRenderScale` times,
+so it stays sharp when someone leans in.
+
 ### Geometry is stripped, the entity is not disabled
 
 A marker authored as a visible cube rather than an empty would render as a stray blob on the model,
@@ -128,13 +140,18 @@ for the model that is not.
 
 ## Every panel starts closed, and a tap opens it
 
-Only the dots are drawn at first. Tapping a dot shows its panel and leader line; tapping it again
-hides them. It is a **toggle per dot**, not a single selection, so a reader can deliberately leave
-two or three open side by side while a stray tap on open air changes nothing.
+Only the dots are drawn at first. Tapping a dot shows its panel and leader line; tapping the same
+dot again hides them. A tap on open air changes nothing.
 
-Nine panels open at once is the unreadable clump the ring layout already fights, and it is not what
-anyone wants anyway — a reader looks at one part at a time. Starting closed also means the model
-itself is unobstructed until something is asked for.
+**Exactly one panel is open at a time.** Tapping a second dot puts the first away rather than adding
+to it, so the reader is always looking at one label and never has to tidy up after themselves — and
+a reader does look at one part at a time. Starting closed means the model is unobstructed until
+something is asked for.
+
+This is also what lets every panel share a single position: see "Layout" below. The two are one
+design, not two — with panels stacked on one coordinate, a second open panel would sit exactly on
+top of the first. `setOpen(_:at:)` is the single place a panel and its leader line are switched, so
+a line to a panel that is not there cannot happen.
 
 ### The tap is matched by proximity, not by a hit test
 
@@ -167,25 +184,57 @@ not select, move, or otherwise disturb a model, and a tap landing nowhere near a
 outright. The minigames' pinch is unrelated — Vision reads it from the camera feed, never from the
 screen — so the two can never contend.
 
-## Layout: a ring around the model
+## Layout: one place, above the model
 
 **Panels are not built at their markers.** On an anatomy model the markers are wherever the anatomy
-is, and the anatomy is small: `Showcase_Coral.usdz` puts six of its nine `ANNO_*` empties within a
-couple of millimetres of each other. Built in place, the panels interpenetrate into one unreadable
-clump. Each is pushed out to a ring instead, with a leader line back to its point.
+is, and the anatomy is small: scaled to its 13 cm target width, `Showcase_Coral.usdz` puts all nine
+`ANNO_*` empties within a couple of centimetres of each other. Built in place, the panels
+interpenetrate into one unreadable clump. Each is pushed clear, with a leader line back to its point.
 
-**The ring is around the model's vertical axis**, and that is the part worth keeping. Pushing panels
-apart only within the card's plane looks right from one side and collapses from the other. Spreading
-them by *angle* means that from wherever the phone happens to be, some panels are in front of the
-model and some behind, and walking around the card reveals the rest — which is the behaviour that
-makes them feel like part of the object.
+**Every panel goes to the same point: centred over the model, lifted so its bottom edge clears the
+model's top by `annotationPanelClearance`.** The half-height in that sum is why `panel(title:detail:)`
+reports the height it wrapped to and not only its width.
 
-- **Radius** — half the model's larger horizontal extent, plus `annotationRingMargin`. Measured from
-  the model's own `visualBounds`, so it follows whatever `modelWidths` scaled that card to.
-- **Angle** — assigned by marker height, evenly spaced. The ring therefore spirals up the model
-  rather than crowding one band, and ties are broken by entity name so the arrangement is stable and
-  reproducible rather than following the order the JSON happened to be written in.
-- **Height** — each panel keeps its own marker's height, so its leader line stays roughly horizontal.
+### Why not a ring
+
+This replaced a ring of panels spread by angle around the model's vertical axis. The ring measured
+out badly on the one card that uses it:
+
+| | |
+|---|---|
+| Model, after `fit` | 0.130 m wide × 0.130 m tall |
+| Ring radius | 0.115 m |
+| Arc between 9 panels | **0.080 m** |
+| Panel width | **0.105 m** |
+
+The panels were wider than the gap between them, so they overlapped anyway — while also being spread
+across nine different heights. Worse, a ring puts roughly half of them *behind* the model from
+wherever the phone happens to be, so tapping a dot could open a label into the far side of the coral.
+**Position that depends on where the reader is standing is exactly what reads as random.**
+
+### Why above
+
+Above the model is the one region nothing can occlude, from any angle, with no per-frame work to keep
+it there. Out to the side is only clear from some directions; at the marker's own height is clear
+from almost none.
+
+Every panel going to the *same* point above it is then not a compromise but the point: a reader who
+taps four dots in a row sees the label appear in the same place four times, and only the leader line
+moves to say which part they picked. Verified by rendering the real asset offscreen — four different
+annotations from one viewpoint put the panel on the same pixels.
+
+The leader line is cleared by half the panel's **larger** side. The panel billboards, so which of its
+two dimensions faces the line depends on where the reader is standing, and the larger one is the only
+clearance that holds from every angle.
+
+### Billboarding cannot be checked in the simulator
+
+`BillboardComponent` targets the AR camera. Under `ARView(cameraMode: .nonAR)` — which is the only
+way to put this scene in the simulator — it does not rotate the panel at all: from behind, the quad
+renders back-face and the text comes out mirrored, and with the default `.back` face culling it
+simply vanishes. That is a property of the harness, not of the app, and it is worth knowing before
+someone "fixes" the culling in response to it. Offscreen rendering can verify panel *position*; only
+a device verifies panel *orientation*.
 
 ### Built into the pivot, not into the model
 
@@ -227,7 +276,7 @@ At the top of `Annotations.swift`:
 |---|---|
 | `annotationPrefix` | The name a marker entity must start with (`ANNO`) |
 | `annotationMetresPerPoint` | **How big every label is in the world.** The first dial to reach for |
-| `annotationRingMargin` | How far beyond the model's silhouette the ring of panels sits |
+| `annotationPanelClearance` | Gap between the top of the model and the bottom edge of the open panel |
 | `annotationBoxMaxWidth` | Width the label is laid out at, so where the body text wraps and what shape the panel is |
 | `annotationRenderScale` | Texture supersampling. Raise it if labels look soft when the phone is close, at the cost of texture memory |
 | `annotationLeaderThickness` | Thickness of a leader line, in metres |
