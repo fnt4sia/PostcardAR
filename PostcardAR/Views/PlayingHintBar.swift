@@ -8,11 +8,35 @@ import SwiftUI
 struct PlayingHintBar: View {
     var text: String
 
-    private let size = CGSize(width: 344, height: 69.018)
+    /// Which background this bar draws on — `.pinch` for every simulation hint, `.tap` for the
+    /// showcase-card "TAP ON SCREEN" hint, which reads as two full lines and needs the taller
+    /// shape to hold them. Same 344pt width either way; only the height differs.
+    enum Shape {
+        case pinch
+        case tap
+
+        var imageName: String {
+            switch self {
+            case .pinch: "PinchHintShape"
+            case .tap: "TapHintShape"
+            }
+        }
+
+        var height: CGFloat {
+            switch self {
+            case .pinch: 69.018
+            case .tap: 99
+            }
+        }
+    }
+
+    var shape: Shape = .pinch
+
+    private var size: CGSize { CGSize(width: 344, height: shape.height) }
 
     var body: some View {
         ZStack {
-            Image("PinchHintShape")
+            Image(shape.imageName)
                 .resizable()
                 .frame(width: size.width, height: size.height)
 

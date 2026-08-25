@@ -12,6 +12,10 @@ struct InstructionsPopup: View {
     var buttonTitle: String = "Start"
     var action: () -> Void = {}
 
+    /// `false` for a popup dismissed by tapping the screen rather than a button — the showcase
+    /// card's "tap to reveal information" intro, which has nothing to press *to* dismiss.
+    var showsButton: Bool = true
+
     private let cardSize = CGSize(width: 344, height: 439.018)
 
     var body: some View {
@@ -43,18 +47,20 @@ struct InstructionsPopup: View {
             }
             
 
-            Button(action: action) {
-                Text(buttonTitle)
-                    .font(DesignTokens.Typography.button)
-                    .foregroundStyle(DesignTokens.whiteText)
-                    .fitsOneLine(minimumScale: 0.7)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 44)
-                    .background(Capsule().fill(DesignTokens.secondaryBlue))
-                    .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
-                    .contentShape(Capsule())
+            if showsButton {
+                Button(action: action) {
+                    Text(buttonTitle)
+                        .font(DesignTokens.Typography.button)
+                        .foregroundStyle(DesignTokens.whiteText)
+                        .fitsOneLine(minimumScale: 0.7)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 44)
+                        .background(Capsule().fill(DesignTokens.secondaryBlue))
+                        .overlay(Capsule().stroke(DesignTokens.buttonBorder, lineWidth: 1))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(PressableButtonStyle())
             }
-            .buttonStyle(PressableButtonStyle())
         }
     }
 }
@@ -65,7 +71,7 @@ struct InstructionsPopup: View {
         InstructionsPopup(
             title: "THE SILENT KILLER",
             message: """
-                Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off.
+                Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off. \n
                 
                 """
         )
