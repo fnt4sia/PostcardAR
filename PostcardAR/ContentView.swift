@@ -73,6 +73,19 @@ private struct ScannerScreen: View {
     @State private var game = GameSession()
     @State private var annotations = AnnotationLayer()
 
+    /// Whether the showcase card's own intro has been dismissed for the *current* sighting of an
+    /// annotated card. Reset to `false` when `annotatedShowcaseVisible` drops, so scanning the
+    /// card again shows the intro again rather than remembering it was dismissed once and never
+    /// speaking again for the rest of the session.
+    @State private var dismissedAnnotationIntro = false
+
+    /// Single source of truth for the intro popup, shared by the popup itself and the X button
+    /// that must hide while it's up — two separate `if`s reading the same three conditions would
+    /// have been exactly the kind of drift that let the X button show over it in the first place.
+    private var showsAnnotationIntro: Bool {
+        status.annotatedShowcaseVisible && !dismissedAnnotationIntro && game.phase == .idle
+    }
+
     var body: some View {
         PostcardARView(status: status, game: game, annotations: annotations, library: library)
             .ignoresSafeArea()
@@ -81,7 +94,7 @@ private struct ScannerScreen: View {
             .overlay(alignment: .topLeading) {
                 // Hidden on .countdown too — 3·2·1 shouldn't be interruptible any more than the
                 // result screen is.
-                if game.phase != .finished && game.phase != .countdown {
+                if game.phase != .finished && game.phase != .countdown && !showsAnnotationIntro {
                     Button {
                         close()
                     } label: {
@@ -100,10 +113,31 @@ private struct ScannerScreen: View {
             // (its own `PlayingHintBar`, the HUD, the result card), and two cards can be in
             // frame together — this only speaks while nothing else is.
             .overlay(alignment: .bottom) {
-                if status.annotatedShowcaseVisible, game.phase == .idle {
-                    PlayingHintBar(text: "TAP TO VIEW INFORMATION")
+                // Waits for the intro to be dismissed first — otherwise the hint bar and the
+                // popup telling the player the exact same thing were showing at once.
+                if status.annotatedShowcaseVisible, dismissedAnnotationIntro, game.phase == .idle {
+                    PlayingHintBar(text: "TAP ON SCREEN\nFOR INFORMATION", shape: .tap)
                         .padding(.bottom, 37)
                 }
+            }
+            // The showcase card's intro, once per sighting. No button — tapping anywhere, dot or
+            // not, dismisses it; the dimmed backdrop itself catches that tap before it can reach
+            // a dot underneath, so the first tap only ever closes the intro, never also opens a
+            // label on the same gesture.
+            .overlay {
+                if showsAnnotationIntro {
+                    dimmed {
+                        InstructionsPopup(
+                            title: "TAP ON YOUR SCREEN\nTO REVEAL INFORMATION",
+                            message: "Tap a white dot to learn more.",
+                            showsButton: false
+                        )
+                    }
+                    .onTapGesture { dismissedAnnotationIntro = true }
+                }
+            }
+            .onChange(of: status.annotatedShowcaseVisible) { _, visible in
+                if !visible { dismissedAnnotationIntro = false }
             }
             // Phase-keyed haptics, independent of the per-second ones below: a "get ready" tap
             // right at countdown kickoff (before 3 even shows — the text-keyed haptic only fires

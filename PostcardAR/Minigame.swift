@@ -66,7 +66,7 @@ enum Minigame {
                 duration: 30,
                 title: "THE SILENT KILLER",
                 instructions: """
-                    Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off.
+                    Drupella snails are eating the coral! Pinch one with your thumb and finger to pull it off. \n
                     """,
                 resultLabel: "CLEARED",
                 resultTitle: "DRUPELLA REMOVED",
@@ -78,7 +78,7 @@ enum Minigame {
                 duration: 45,
                 title: "REBUILD THE REEF",
                 instructions: """
-                    The biorock frame is bare. Pinch a coral with your thumb and finger and carry it onto a glowing plate.
+                    The biorock frame is bare. Pinch a coral with your thumb and finger and carry it onto a glowing plate. \n
                     """,
                 resultLabel: "PLANTED",
                 resultTitle: "CORAL PLANTED",
