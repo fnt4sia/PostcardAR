@@ -60,8 +60,7 @@ private let annotationLeaderThickness: Float = 0.0018
 /// the marker, so it is drawn a little larger than a pure marker would need to be.
 private let annotationDotRadius: Float = 0.003
 
-/// Colour of the dots and leader lines.
-private let annotationLineColor = UIColor.white
+private let annotationLineColor = UIColor(named: "SecondaryBlue")!
 
 /// The material both markers wear — see `annotationLineColor`.
 ///

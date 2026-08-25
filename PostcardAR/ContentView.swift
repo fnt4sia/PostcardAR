@@ -129,7 +129,7 @@ private struct ScannerScreen: View {
                     dimmed {
                         InstructionsPopup(
                             title: "TAP ON YOUR SCREEN\nTO REVEAL INFORMATION",
-                            message: "Tap a white dot to learn more.",
+                            message: "Tap a blue dot to learn more.",
                             showsButton: false
                         )
                     }
