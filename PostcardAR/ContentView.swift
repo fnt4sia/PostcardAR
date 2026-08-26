@@ -107,6 +107,13 @@ private struct ScannerScreen: View {
                     .padding()
                 }
             }
+            // DEBUG PANEL — off. To bring the diagnostics readout back, uncomment every block
+            // tagged `DEBUG PANEL`: `grep -rn "DEBUG PANEL" PostcardAR` finds all of them, across
+            // this file, `PostcardARView.swift`, `PinchInteraction.swift` and `QRCardIdentity.swift`.
+            //
+            // .overlay(alignment: .topTrailing) {
+            //     if showsStatusPanel { statusPanel }
+            // }
             .overlay { runOverlay }
             // A showcase card's own hint, for tapping its labels open. Gated on `.idle`: a
             // simulation card already owns the bottom of the screen the moment a run starts
@@ -267,6 +274,103 @@ private struct ScannerScreen: View {
         // animates; nothing else's gestures get caught in it.
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: game.phase)
     }
+
+    // MARK: Diagnostics — DEBUG PANEL, commented out
+    //
+    // Developer UI: the top-right readout that answers "nothing appeared, which half failed?" by
+    // reporting the two halves of card identity separately — ARKit tracking an image, and Vision
+    // decoding a QR. A tracked card alone never summons a model, so "Detected" beside "No QR" is
+    // the whole diagnosis. See docs/troubleshooting.md for what each line means.
+    //
+    // Commented out rather than deleted so it can come back. Restoring it is uncommenting every
+    // block tagged `DEBUG PANEL` — `grep -rn "DEBUG PANEL" PostcardAR` lists them: this one, the
+    // `.overlay` in `body` above, `ARStatus`'s fields and the per-frame gathering and writes in
+    // `PostcardARView.swift`, `qrDecodeRate` in `PinchInteraction.swift`, and `decodeRate` in
+    // `QRCardIdentity.swift`.
+    //
+    // **All five go together.** This panel was lost once by commenting out only its call site: the
+    // view survived with no caller, and every `ARStatus` field feeding it went on being written
+    // sixty times a second for nobody. Half-restoring it has the same failure mode in reverse.
+    //
+    // /// Hidden once a run is on screen, where it would sit on top of the HUD. Kept up for the grace
+    // /// screen on purpose: "hand in frame" with nothing locked is exactly the reading needed when a
+    // /// model failed to hold, and that is the moment it failed.
+    // private var showsStatusPanel: Bool {
+    //     switch game.phase {
+    //     case .idle, .instructions, .grace: true
+    //     case .countdown, .playing, .finished: false
+    //     }
+    // }
+    //
+    // /// Detection, identity and loading reported separately, because when nothing shows up the
+    // /// question is always which of the three failed.
+    // private var statusPanel: some View {
+    //     VStack(alignment: .leading, spacing: 6) {
+    //         line(!status.detectedImages.isEmpty,
+    //              done: "Detected: \(status.detectedImages.joined(separator: ", "))",
+    //              waiting: "Looking for a card…", icon: "viewfinder")
+    //
+    //         // The percentage is the point, not the name: a QR is checksummed, so a name is never
+    //         // wrong, only absent or intermittent. A name arriving at 20% cannot carry a card.
+    //         Label(status.qrPayload.map { "QR: \($0) · \(Int(status.qrDecodeRate * 100))%" }
+    //                 ?? "No QR · \(Int(status.qrDecodeRate * 100))%",
+    //               systemImage: status.qrPayload == nil ? "qrcode.viewfinder" : "qrcode")
+    //             .foregroundStyle(status.qrPayload == nil ? .white.opacity(0.6) : Color.green)
+    //
+    //         // Tagged with the route that placed each one, so a card standing on its own reference
+    //         // image can be told from one a payload bound — the two are indistinguishable on camera.
+    //         if status.showingCards.isEmpty {
+    //             Label("No model on screen", systemImage: "cube")
+    //                 .foregroundStyle(.white.opacity(0.6))
+    //         } else {
+    //             Label("Showing: \(status.showingCards.joined(separator: ", "))",
+    //                   systemImage: "cube.fill")
+    //                 .foregroundStyle(Color.green)
+    //         }
+    //
+    //         // Only while it is actually holding something. The lock is invisible when it works —
+    //         // the model simply stays put — so this is what says it was the lock and not luck, and
+    //         // the hand line below says whether Vision is seeing the hand at all.
+    //         if !status.lockedCards.isEmpty {
+    //             Label("Locked: \(status.lockedCards.joined(separator: ", "))",
+    //                   systemImage: "lock.fill")
+    //                 .foregroundStyle(.yellow)
+    //         }
+    //
+    //         Label(status.handInFrame ? "Hand in frame" : "No hand",
+    //               systemImage: status.handInFrame ? "hand.raised.fill" : "hand.raised.slash")
+    //             .foregroundStyle(status.handInFrame ? Color.green : .white.opacity(0.6))
+    //
+    //         line(library.total > 0 && library.loaded == library.total,
+    //              done: "Models loaded (\(library.loaded))",
+    //              waiting: "Loading models (\(library.loaded)/\(library.total))…",
+    //              icon: "clock")
+    //
+    //         ForEach(library.errors, id: \.self) { message in
+    //             Text(message)
+    //                 .font(.caption)
+    //                 .foregroundStyle(.red)
+    //         }
+    //     }
+    //     .font(.caption.weight(.medium))
+    //     // Fixed, not a Dynamic Type token: this is a dense developer readout, and growing it with
+    //     // the system text size only pushes lines off the card it is drawn on.
+    //     .dynamicTypeSize(.medium)
+    //     .foregroundStyle(.white)
+    //     .padding(10)
+    //     .frame(maxWidth: 260, alignment: .leading)
+    //     .background(.black.opacity(0.6), in: .rect(cornerRadius: 12))
+    //     .padding(8)
+    //     // Never eats a tap: the one gesture in the app opens an annotation, and a dot can sit
+    //     // anywhere on screen including under this.
+    //     .allowsHitTesting(false)
+    // }
+    //
+    // private func line(_ isDone: Bool, done: String, waiting: String, icon: String) -> some View {
+    //     Label(isDone ? done : waiting, systemImage: isDone ? "checkmark.circle.fill" : icon)
+    //         .foregroundStyle(isDone ? Color.green : .white)
+    // }
+    //
 }
 
 #Preview {

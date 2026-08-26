@@ -430,6 +430,11 @@ final class PinchInteraction {
     /// through here because this class owns the sampler the read shares — see `QRCardIdentity`.
     var qrPayload: String? { qr.payload }
 
+    // DEBUG PANEL — how often the video sampler is managing to decode anything at all. Acted on
+    // nowhere; see the commented block in `ContentView.swift` for the set this belongs to.
+    //
+    // var qrDecodeRate: Double { qr.decodeRate }
+
     /// Asks the session for one full-resolution frame and looks for a QR in it.
     ///
     /// The photo pipeline hands back something like 4032 px across where the video stream gives

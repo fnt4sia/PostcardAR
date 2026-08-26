@@ -35,6 +35,15 @@ import Vision
 /// decode long before it stops the game.
 private let payloadHoldSamples = 45
 
+// DEBUG PANEL — how many recent samples `decodeRate` averages over. Thirty at the sampler's 15 Hz
+// is two seconds: long enough to ride out a blurred frame or two, short enough that carrying the
+// card out to arm's length shows up in the number while you are still holding it there.
+//
+// Deliberately shorter than `payloadHoldSamples`, and the two must not be merged: this window is a
+// statistic, that one is state the app acts on.
+//
+// private let decodeRateWindow = 30
+
 /// One card name read off the camera.
 ///
 /// No confidence threshold, on purpose: a QR carries its own error correction, so a payload that
@@ -53,24 +62,46 @@ struct QRCardIdentity {
     /// cannot sit on screen once the card has gone.
     private(set) var payload: String?
 
+    // DEBUG PANEL — fraction of the last `decodeRateWindow` samples that decoded anything, 0...1.
+    //
+    // Acted on nowhere. It answers the one question a name on its own cannot: a payload is
+    // checksummed, so it is never *wrong*, but a name that flickers in at 20% is a code being asked
+    // to decode at a distance, size or motion blur it cannot manage, and no amount of wiring
+    // downstream fixes that.
+    //
+    // private(set) var decodeRate: Double = 0
+    // private var window: [Bool] = []
+
     private var missesSinceDecode = 0
 
     /// Records one sample's worth of observations, decoded or empty.
     mutating func note(_ observations: [BarcodeObservation]) {
         // First rather than best: one card in frame is the case this handles. Two QRs in view
         // needs the corner points to say which anchor each belongs to.
-        guard let decoded = observations.first(where: { $0.payloadString != nil })?.payloadString
-        else {
+        let decoded = observations.first(where: { $0.payloadString != nil })?.payloadString
+        if let decoded {
+            payload = decoded
+            missesSinceDecode = 0
+        } else {
             missesSinceDecode += 1
             if missesSinceDecode >= payloadHoldSamples { payload = nil }
-            return
         }
-        payload = decoded
-        missesSinceDecode = 0
+
+        // DEBUG PANEL
+        //
+        // window.append(decoded != nil)
+        // if window.count > decodeRateWindow {
+        //     window.removeFirst(window.count - decodeRateWindow)
+        // }
+        // decodeRate = window.isEmpty ? 0 : Double(window.count(where: { $0 })) / Double(window.count)
     }
 
     /// Records a decode from a one-off high-resolution capture. Misses are not fed here: a scan
     /// that found nothing says only that the card was not pointed at a code yet.
+    ///
+    /// If the debug panel's `decodeRate` is ever uncommented, this must still not feed it: that
+    /// window is a statistic about the *video stream*, and mixing in a still capture taken at twice
+    /// the resolution would report a readability the ordinary sampler never sees.
     mutating func noteHighResolution(_ observations: [BarcodeObservation]) {
         guard let decoded = observations.first(where: { $0.payloadString != nil })?.payloadString
         else { return }

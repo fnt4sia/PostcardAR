@@ -1,31 +1,62 @@
 # Troubleshooting
 
-Start with the Xcode console, then match the symptom.
+Start with the Xcode console, turn the debug panel on if the console is not enough, then match the
+symptom.
+
+## The debug panel
+
+**Currently commented out.** To switch it on, uncomment every block tagged `DEBUG PANEL`:
+
+```sh
+grep -rn "DEBUG PANEL" PostcardAR
+```
+
+They span `ContentView.swift`, `PostcardARView.swift`, `PinchInteraction.swift` and
+`QRCardIdentity.swift`, and **they go back as a set.** Uncommenting only the view leaves it with no
+data; uncommenting only the writes feeds sixty updates a second to nobody, which is exactly how this
+was lost the first time — see [app-shell.md](app-shell.md#the-debug-panel-and-the-console-beside-it).
+
+Once on, it draws in the top right of the camera screen whenever a run is not (`idle`,
+`instructions`, `grace`). It reports the two halves of card identity separately, which is the whole
+point: **a tracked card alone never summons a model**, so `Detected` with `No QR` is a finished
+diagnosis.
+
+| Line | Reading |
+|---|---|
+| `Looking for a card…` | ARKit is tracking nothing. The image is the problem — see [reference-images.md](reference-images.md) |
+| `Detected: <image>` | that image is tracked. `(names model)` marks a QR-free card; an image *meant* to name its model but spelled differently appears here **unmarked**, which is that mistake's only symptom |
+| `No QR · NN%` | nothing is decoding. The percentage is the number to watch — move closer, enlarge the code, hold steadier |
+| `QR: <name> · NN%` | decoded. Sustained high is a card that will work; 20% is a code being asked to decode at a size or blur it cannot |
+| `No model on screen` | both halves may be fine and the model is the problem — still loading, missing, or scaled off-screen |
+| `Showing: <card> (image)` / `(QR)` | which route placed it. On camera the two are identical, so this is the only way to tell a self-named card from a bound one |
+| `Locked: <card>` | the occlusion lock is holding a model whose card is not tracked. This is the lock working |
+| `Hand in frame` | Vision sees a hand. `No hand` next to a model that vanished means the lock never got its input, not that the lock is broken |
+| `Loading models (n/m)…` | a large `.usdz` takes seconds and they load one after another |
+| red text | `ModelLibrary` errors — a `.usdz` that failed to load |
+
+It is developer UI (`ScannerScreen.statusPanel`), and it takes no taps, so an annotation dot
+underneath still works. Comment it back out before shipping.
 
 ## Reading the console
 
-There is no on-screen debug panel. `Coordinator.report(_:)` prints everything that went wrong,
-once each, prefixed `[PostcardAR]`:
+Always on, and enough on its own for anything that *fails* rather than merely not happening.
+`Coordinator.report(_:)` prints everything that went wrong, once each, prefixed `[PostcardAR]`:
 
 | Message | Means |
 |---|---|
 | `World tracking needs a real device, not the simulator.` | `ARWorldTrackingConfiguration.isSupported` is false. |
 | `QR says "X", but there is no X.usdz.` | A payload decoded cleanly and matched no model — a typo on the card, or a file missing from the bundle. The card tracks perfectly and stays empty. |
+| `QR says "X", but a reference image is named after it…` | A code was printed for a model that already has a reference image of its own. The image places that card; delete the QR from it. |
 | `<name>.json names "…", which is not in <name>.usdz.` | An annotation entry with no matching `ANNO*` entity. |
 | `<name>.usdz has "…" with no entry in <name>.json.` | The reverse — a marker with no text. |
 | `<name>.usdz has plant points but no SingleCoral* corals to plant.` | A planting model that cannot be finished. |
+| `Reference images naming their own model, no QR needed: …` | Printed once at start-up. Not a problem — an inventory. An image you *expected* to be on this list and is not has a name that does not match its `.usdz` exactly, case included, and is silently an ordinary pose-only image. |
 | Anything else | An `ARSession` error, or a `.usdz` that failed to load. |
 
 Silence means nothing was reported, not that everything worked.
 
-For the two things that have no message — whether a card is tracked, and whether a QR decoded —
-print them from `onRenderFrame()`:
-
-```swift
-print(anchors.contains { $0.anchor.isAnchored }, pinch.qrPayload ?? "no QR")
-```
-
-Read the pair together:
+Tracking and decoding have no message of their own — the panel above is what reports those, when it
+is switched on. Read the pair together:
 
 - Never tracked → the reference image is the problem.
 - Tracked but no payload → the code, not the card. Too small, too far, or too blurred to decode.
@@ -58,10 +89,17 @@ the payload names the model. See [card-identity.md](card-identity.md).
 
 ### Detected, but no model appears on that card
 
-In order of likelihood:
+On a **QR-free card** — one placed by a reference image named after its model — there is only ever
+one cause: the image's name and the `.usdz`'s name differ. They are matched exactly, case included,
+so `Showcase_biorock` and `Showcase_Biorock` are two different things, and a name that matches
+nothing is silently an ordinary pose-only image waiting for a QR the card does not carry. Nothing
+is reported, because most images are meant to name nothing. See
+[card-identity.md](card-identity.md#a-card-without-a-qr-name-the-reference-image-after-the-model).
 
-1. **Its QR is not decoding.** The panel says *No QR*, and a tracked card on its own draws nothing.
-   Enlarge the code, move closer, or hold steadier — the percentage on the `QR:` line tells you how
+On a QR card, in order of likelihood:
+
+1. **Its QR is not decoding.** A tracked card on its own draws nothing. Enlarge the code, move
+   closer, or hold steadier — switch the panel on and the percentage on its `QR:` line tells you how
    close you are. See [card-identity.md](card-identity.md).
 2. The QR decoded to a name with no `.usdz` behind it. A red line says so outright.
 3. Its `.usdz` is missing or misnamed. A red line names the file it tried to load.

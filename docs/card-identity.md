@@ -9,6 +9,8 @@ Two questions are asked about every card, and they are answered by different thi
 | **Where** is the card? | ARKit, matching a reference image | `CardAnchor` |
 | **What** is printed on it? | Vision, decoding a QR | `Card`, bound by the payload |
 
+One card answers both at once — see [A card without a QR](#a-card-without-a-qr-name-the-reference-image-after-the-model).
+
 They used to be one question. A reference image was named after its model, so matching the image
 *was* identifying the card. That coupling is what this splits.
 
@@ -40,12 +42,81 @@ walking the reference images, which is the change that makes the two lists indep
 longer needs a same-named reference image to exist, and a reference image no longer needs a
 same-named model.
 
+That independence is also what leaves room for the exception below: because a reference image's
+name is otherwise matched against nothing, a name that *does* match a model can be given a meaning
+of its own.
+
 **A card's kind is read off the payload**, so a QR saying `Simulation_Coral` runs a minigame and one
 saying `Showcase_Coral` does not. Same prefix rule as before, now on the string in the QR rather
 than the string in the asset catalog. See [simulation.md](simulation.md).
 
 Generated codes live in `qr/`, one per model. Use error correction level **H** — a printed card gets
 handled, creased and lit badly, and H tolerates 30% of the code being unreadable.
+
+## A card without a QR: name the reference image after the model
+
+One card in the set carries no code — `Showcase_Biorock`, whose printed artwork *is* the model.
+Nothing about it is special-cased. The rule is one more line of the naming convention:
+
+> **A reference image whose own name is a `.usdz` in the bundle names that model outright.** Its
+> card needs no QR, and its model needs no payload.
+
+So the whole of adding one is: drop `Showcase_Biorock.usdz` in `PostcardAR/`, add a reference image
+to the group **named `Showcase_Biorock`**, and set its printed size. No code, no catalog entry, no
+`qr/` file. Everything downstream — kind by prefix, `modelWidths`, `ANNO*` labels, the mask, the
+seafloor — is unchanged, because all of it keys off the model's *name*, which is now settled a
+frame earlier rather than differently.
+
+It cannot dangle: `CardAnchor.modelName` is only ever filled in from a name that already matched a
+bundled model, so an image named after nothing stays an ordinary pose-only image — which is exactly
+what a set of cards sharing one reference image relies on.
+
+### The two routes never compete
+
+Being able to name a card two ways would be a mess if the two could disagree about the same card or
+the same anchor. They cannot, because each is excluded from the other's half:
+
+| | Anchors it may use | Cards it may place |
+|---|---|---|
+| QR payload | images that name **no** model (`modelName == nil`) | cards with **no** image of their own (`imageAnchor == nil`) |
+| Named image | its own image, fixed at `start(in:)` | its own model, fixed at `start(in:)` |
+
+Concretely, in `Coordinator`:
+
+- `trackedAnchor` — what `rebind(to:)` binds a payload to — skips anchors with a `modelName`. A
+  payload landing on a self-naming image would draw a second model on that card, *and* leave the QR
+  card the payload actually came from empty.
+- `rebind(to:)` refuses a payload naming a card that has an `imageAnchor`, and reports it. One card
+  on two anchors is a content mistake — printing a QR for a model that already has its own image —
+  not a state worth handling.
+- The card loop resolves each card's anchor as `imageAnchor ?? bound`, so the two lists are read in
+  that order and never merged.
+
+The upshot is that a named-image card and a QR card can be **live at the same time**, on different
+anchors — which the single `bound` could never do on its own. The "two cards in frame at once"
+limit below still applies among the QR cards, which share one binding.
+
+### The latch is unchanged
+
+`named` gains one term:
+
+```swift
+let named = cards[index].imageAnchor != nil
+    || pinch.qrPayload == cards[index].name
+```
+
+A card named by its own image is named on every frame that image is tracked — the name is printed
+geometry rather than a decode, so there is nothing to age out and nothing to re-read, and
+`payloadHoldSamples` does not apply to it. `tracked` is still required alongside, so the safety
+property is exactly as tight: **only a frame that tracks an anchor and names this card may enable a
+pivot**, and an unposed pivot still never gets switched on.
+
+`attach(_:size:)` moved out of `rebind(to:)` and into the card loop for the same reason — it is now
+called on the first *tracked* frame, whichever route placed the card, rather than on the first
+decode. It is idempotent and cheap after that.
+
+A card placed this way also never triggers `scanForQRAtHighResolution()`: `trackedAnchor` excludes
+its image, so a card with nothing to decode never pays for a still capture.
 
 ## The mask hides the QR from the player, not from the decoder
 
@@ -182,6 +253,11 @@ A model needs **both** halves of the split, so an empty screen has two causes th
 on camera. Print them to tell the two apart: `anchors.contains { $0.anchor.isAnchored }` is the
 pose half, `pinch.qrPayload` the identity half. A tracked card alone never summons a model.
 
+For a card named by its own reference image there is only the pose half, so an empty screen means
+the image is not being tracked — or that the image's name and the `.usdz`'s name do not match
+character for character, in which case the app has quietly treated it as an ordinary pose-only
+image and is waiting for a QR that is not printed on it. Check the spelling and the case first.
+
 A QR carries its own error correction, so a payload that decodes at all has passed a checksum — a
 *wrong* name is close to impossible, and the only failure mode is *no* name. If the payload never
 arrives, the code is being asked to decode at a size, distance or motion blur it cannot, and no
@@ -193,9 +269,10 @@ symptom is otherwise a card that tracks perfectly and stays empty.
 
 ## Known limits
 
-Both follow from there being one payload and one binding.
+Both follow from there being one payload and one binding, so both are limits on the **QR** cards
+only — a card named by its own reference image has a binding of its own and is unaffected.
 
-- **Two cards in frame at once** bind to whichever reference image ARKit lists first, so the model
+- **Two QR cards in frame at once** bind to whichever reference image ARKit lists first, so the model
   can land on the wrong one. `BarcodeObservation` conforms to `QuadrilateralProviding` and carries
   the code's four corner points, so the fix is to project each anchor's position into the image and
   match each payload to the nearest — it simply is not done yet.

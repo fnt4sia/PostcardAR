@@ -12,6 +12,12 @@ one.
    a card carrying `Showcase_postcard` draws `Showcase_postcard.usdz`. Reference images therefore
    only have to track *well*, not track *distinguishably*, which is the hard half to author. See
    `docs/card-identity.md`.
+   **The one exception is a reference image named after a model in the bundle**, which names that
+   model outright and needs no QR on its card — `Showcase_Biorock`, whose printed artwork *is* its
+   model. Not a special case: an image's name is otherwise matched against nothing, so a name that
+   does match a `.usdz` is free to mean something. The two routes are kept apart rather than
+   merged — the QR only ever binds images that name nothing, and only ever places cards that have
+   no image of their own — so a named-image card and a QR card can be live at once.
 4. The model stays attached to its card while the card is visible: move or tilt the card and the
    model follows.
 5. **The QR payload's prefix decides the card's kind.** `Simulation*` runs a minigame on it;
@@ -30,12 +36,15 @@ one.
 
 Adding a card is a `.usdz` in `PostcardAR/` and a QR carrying its name — no catalog entry of its
 own, and no code change; a second file, `<name>.json`, if it has annotations. Any reference image
-in the group will carry it. Nothing in the source names an individual card.
+in the group will carry it. Nothing in the source names an individual card. To skip the QR
+instead, add a reference image to the group **named after the model** and print the card without a
+code.
 
 **The naming conventions are the whole content API.** All prefix matches, all case-sensitive:
 
 | Name | Means |
 |---|---|
+| a reference image named after a `.usdz` | that image *is* the card's name; no QR needed |
 | `Simulation*` (QR payload / `.usdz`) | runs a minigame; anything else is a showcase card |
 | `ANNO*` | a point to hang an explanation label on; its panel is built into the scene above the model, closed until its dot is tapped, and only one is ever open |
 | `Drupella*` | a grabbable snail; `*_Outline` is its outline mesh |
@@ -81,10 +90,10 @@ chosen to avoid. See "The session and its configuration" in `docs/tracking.md`.
 | `PostcardAR/GameSession.swift` | The run's state machine and clocks — phases, score, the run, the 5 s grace. Shared by both minigames |
 | `PostcardAR/Minigame.swift` | The two games' settings: run length and every word the player reads. One block per game |
 | `PostcardAR/Views/` | The Figma-traced screens — home, loading, instructions, countdown, HUD, result — and `DesignTokens`, which owns every colour and every font token |
-| `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | One reference image per card, each with its real-world physical size |
+| `PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/` | Reference images, each with its real-world physical size. A whole set of cards may share one; an image named after a `.usdz` names that model and its card carries no QR |
 | `PostcardAR/<model name>.usdz` | A model a QR can name — see `docs/models.md` for what makes one usable |
 | `PostcardAR/<model name>.json` | Annotation text for that model, if it has any — see `docs/annotations.md` |
-| `qr/<model name>.png` | Generated QR carrying that name, to print on the card |
+| `qr/<model name>.png` | Generated QR carrying that name, to print on the card. Absent for a model named by a reference image instead — `Showcase_Biorock` |
 | `PostcardAR/Seafloor.usdz` | Not a card. The shared ground plane laid under every model that does not bring its own — see `docs/models.md` |
 | `README.md` | What the project is, how to run it, how to add a card |
 | `docs/` | Design notes, one file per area |
@@ -130,10 +139,13 @@ AnchorEntity(.image)   <- ARKit rewrites this transform every frame. Never modif
                           parent anything visible under it — see "Visibility" below.
 ```
 
-The `Coordinator` keeps two arrays and a binding between them: `anchors` of `CardAnchor` (image
-name, printed size, anchor entity — where a card is, never which one), `cards` of `Card` (model
-name, kind, pivot, `heldPose` — what a card is, never where), and `bound`, the pair a decoded
-payload joins. Structs are copied freely because the entities in them are classes; `heldPose` and
+The `Coordinator` keeps two arrays and a binding between them: `anchors` of `CardAnchor` (printed
+size, anchor entity — where a card is, never which one), `cards` of `Card` (model name, kind,
+pivot, `heldPose` — what a card is, never where), and `bound`, the pair a decoded payload joins.
+The exception to "never which one" is `CardAnchor.modelName`, filled in when an image is named
+after a bundled model; the card side of that same pairing is `Card.imageAnchor`, and both are
+fixed in `start(in:)`. A card resolves its anchor as `imageAnchor ?? bound`, so the two routes are
+read in order and never merged. Structs are copied freely because the entities in them are classes; `heldPose` and
 the attachment flags need mutating in place, which is why the per-frame loop indexes
 (`cards[index]`) rather than iterating values.
 
@@ -172,10 +184,14 @@ driven by hand.** Pivots are created with `isEnabled = false`, and each rendered
 let handInFrame = held != nil
     || Date().timeIntervalSince(lastHandSeenTime) < handPresenceTimeout
 let isSimulation = cards[index].kind == .simulation
-let named = pinch.qrPayload == cards[index].name
+let named = cards[index].imageAnchor != nil || pinch.qrPayload == cards[index].name
 let visible = (tracked && named)
     || (cards[index].pivot.isEnabled && (tracked || (handInFrame && isSimulation)))
 ```
+
+"Names this card" below means either half of `named`: a QR payload carrying the card's name, or a
+reference image named after its model — the second is true on every frame its image is tracked,
+since the name is printed geometry rather than a decode that ages out.
 
 | Card tracked | QR names this card | Hand in frame | Simulation | Model |
 |---|---|---|---|---|
@@ -188,10 +204,12 @@ let visible = (tracked && named)
 
 Two things are load-bearing and must survive any rewrite:
 
-1. **Only a frame that is both tracked and QR-named can enable a pivot.** The lock latches on
+1. **Only a frame that is both tracked and named can enable a pivot.** The lock latches on
    `pivot.isEnabled`, so it can hold a model but never summon one. The payload must *name the bound
    card*, not merely decode: a binding is never cleared, so a bare "some QR is in shot" test lets
-   an unrelated code re-summon the last model bound — see `docs/card-identity.md`. Drop that and every model is drawn at the world origin —
+   an unrelated code re-summon the last model bound — see `docs/card-identity.md`. The image route
+   satisfies the same requirement structurally, since an image only ever names its own model. Drop
+   that and every model is drawn at the world origin —
    the phone's position at session start — from the moment its `.usdz` loads, because an unwritten
    pivot sits at the identity transform. All models load at launch, so they pile up there and
    whichever card is near that spot appears to have spawned them.
@@ -320,16 +338,43 @@ rather than being cleared.
 
 ## Status
 
-`ARStatus` carries exactly two fields, both of which draw player-facing UI:
-`annotatedShowcaseVisible` and `handTooClose`. Anything written there is read by `ContentView`, so
-do not add a field for diagnosis — there is no debug panel any more. Guard every write with an
-inequality check: `@Observable` notifies on every set without comparing, and this runs once a frame.
+`ARStatus` carries two player-facing fields — `annotatedShowcaseVisible` and `handTooClose` — and,
+below a `MARK: Diagnostics`, a **commented-out** block that drew the debug panel and nothing else.
+Guard every write with an inequality check: `@Observable` notifies on every set without comparing,
+and this runs once a frame.
+
+**The debug panel is off.** Every piece of it is commented out and tagged `DEBUG PANEL` —
+`grep -rn "DEBUG PANEL" PostcardAR` finds all of them, across `ContentView.swift`,
+`PostcardARView.swift`, `PinchInteraction.swift` and `QRCardIdentity.swift`. Uncomment them **as a
+set** to switch it on; uncommenting only the view leaves it with no data, and uncommenting only the
+writes feeds 60 updates a second to nobody, which is how it was lost once already.
+
+The panel is `ScannerScreen.statusPanel` in `ContentView.swift`, top-right, up during `idle`,
+`instructions` and `grace` and hidden once a run owns the screen. It exists to answer one question —
+*nothing appeared, which half failed?* — by reporting the two halves of card identity separately:
+
+| Line | Says |
+|---|---|
+| `Detected: <image>` | ARKit is tracking that reference image. `(names model)` marks one that names its own model, so a QR-free card whose name is misspelled shows up here **unmarked** — the only symptom that mistake has |
+| `QR: <name> · NN%` | the payload, and the fraction of recent video samples that decoded anything. The percentage is the useful half: a QR is checksummed, so a name is never wrong, only absent or intermittent |
+| `Showing: <card> (image\|QR)` | a model is on screen, and which route placed it — indistinguishable on camera |
+| `Locked: <card>` | the occlusion lock is holding a model whose card is not tracked. Invisible when it works, silent when it fails |
+| `Hand in frame` | the lock's input, so failing to lock can be told from failing to see the hand |
+| `Models loaded (n/m)` | from `ModelLibrary`, plus its errors in red |
+
+It is developer UI: `.allowsHitTesting(false)` so it never eats a tap meant for an annotation dot,
+and `.dynamicTypeSize(.medium)` because it is a dense readout rather than player-facing type.
+Comment it back out before shipping.
+
+`start(in:)` reports the self-naming images once to the console, and that one **is** live — a
+misspelled image name is not an error, it is an ordinary pose-only image, so it would otherwise fail
+silently whether the panel is on or not.
 
 Diagnostics go to the console through `Coordinator.report(_:)`, which drops repeats because
 `didFailWithError` can fire on every frame. That is the only account of a missing `.usdz`, a
 malformed `.json`, or a QR naming a model that is not in the bundle, so keep the call sites.
 
-`handTooClose` is not a debug field — it drives player-facing UI. A hand right against the lens
+`handTooClose` is not a diagnostic field — it drives player-facing UI. A hand right against the lens
 crops out every joint the pinch needs, so nothing responds and nothing says why; while it holds,
 `ContentView` blurs the camera with *Move your hand back* during `playing`.
 
@@ -417,6 +462,12 @@ card.
 `instructions` needs it for the opposite reason to the other two: not because there is a run to
 protect but because there is not one yet, so losing the card there calls `reset()` outright — no
 grace, nothing carried over, the panel goes away with the card and the next card seen starts over.
+Its one softening is `instructionsLossTimeout` (0.3 s), inside `GameSession`, so a dropped tracking
+frame cannot pull Start out from under a tap. **Do not add a second one in the coordinator's
+visibility latch.** One existed and deadlocked: `visible` is what `activeCardPresent` feeds back
+into `update(cardPresent:)`, so a term true *because* the phase is `instructions` pins the phase
+there for ever and the panel never leaves. Softening belongs on the `GameSession` side of that call,
+where the answer is not its own input.
 That makes an ordering detail load-bearing in `updateGame(cardPresent:candidate:)`: `cardPresent`
 was computed by the card loop before `activeSimulationCard` was claimed, so it reads `false` on the
 claiming frame and must be overridden to `true` there, or `begin(_:target:)` and `reset()` alternate

@@ -101,12 +101,22 @@ coordinator living outside the view hierarchy entirely, and read by the overlay.
 final class ARStatus {
     var annotatedShowcaseVisible = false
     var handTooClose = false
+
+    // MARK: Diagnostics — DEBUG PANEL, commented out
+    // var detectedImages: [String] = []
+    // var showingCards: [String] = []
+    // var lockedCards: [String] = []
+    // var handInFrame = false
+    // var qrPayload: String?
+    // var qrDecodeRate: Double = 0
 }
 ```
 
-Both fields draw player-facing UI. There is no debug panel — diagnostics go to the console through
-`Coordinator.report(_:)` — so a field here is a thing on screen, not a thing to look at while
-debugging.
+Both live fields draw player-facing UI. Everything under `MARK: Diagnostics` drew
+`ScannerScreen.statusPanel` and was read nowhere else — developer UI, kept in one block so it lives
+and dies in one piece, and currently commented out. What each line means, and how to switch it back
+on, is in [troubleshooting.md](troubleshooting.md#the-debug-panel); the rest of the diagnostics go to
+the console through `Coordinator.report(_:)` and are always on.
 
 `@Observable` is a macro. At compile time it rewrites every stored property into a get/set pair
 that reports reads and writes to the Observation framework.
@@ -216,6 +226,7 @@ private struct ScannerScreen: View {
         PostcardARView(status: status, game: game, annotations: annotations, library: library)
             .ignoresSafeArea()
             .overlay(alignment: .topLeading) { closeButton }
+         // .overlay(alignment: .topTrailing) { statusPanel }   // developer UI, commented out
             .overlay { runOverlay }
             .overlay(alignment: .bottom) { showcaseHint }
     }
@@ -408,19 +419,35 @@ appears.
 No delegate protocol between the AR view and the UI, no notification centre, no manual refresh.
 The dependency was established simply by reading the property.
 
-### Diagnostics do not go through `ARStatus`
+### The debug panel, and the console beside it
 
-There was once a debug panel listing tracked images, locked models, load counts and errors. It was
-removed: it had stopped being rendered at all, and every field on `ARStatus` that existed only to
-feed it was being written sixty times a second for nobody.
+The panel lists tracked images, the QR payload and its decode rate, what is on screen and by which
+route, locked models, hand presence, and load counts. It is `ScannerScreen.statusPanel`, top right,
+up during `idle`, `instructions` and `grace` and hidden once a run owns the screen — it would sit on
+the HUD. Kept up for `grace` deliberately: "hand in frame" with nothing locked is exactly the
+reading wanted when a model failed to hold, and that is the moment it failed.
 
-What replaced it is `Coordinator.report(_:)`, which prints to the console and drops repeats —
-`didFailWithError` can fire on every frame. It is the only account of a missing `.usdz`, a
+**It is commented out**, so none of it ships and none of it runs. Every piece carries a `DEBUG PANEL`
+tag, and `grep -rn "DEBUG PANEL" PostcardAR` is the switch: uncomment all of them to bring it back.
+
+They go back **as a set**, and that is the whole reason the tag exists. The panel was lost once
+before by exactly the opposite of a clean removal: it stopped being *rendered* — the
+`showsStatusPanel`/`statusPanel` pair survived a layout change with no call site — while every field
+on `ARStatus` feeding it went on being written sixty times a second for nobody. Three things follow,
+and all three are in the code now:
+
+- **Guard every diagnostic write with an inequality check**, exactly like the player-facing fields.
+  `@Observable` notifies on every set without comparing.
+- **Keep them in one `MARK: Diagnostics` block**, so panel and fields are deleted together rather
+  than one outliving the other again.
+- **Comment the view and its feed together.** Commenting only the call site reproduces the original
+  bug; commenting only the writes leaves a view reading fields that no longer exist.
+
+The panel does not replace `Coordinator.report(_:)`, which prints to the console and drops repeats —
+`didFailWithError` can fire on every frame. That is still the only account of a missing `.usdz`, a
 malformed `<name>.json`, or a QR naming a model that is not in the bundle, so keep its call sites
-even when they look unreachable.
-
-The rule that came out of it: **a field on `ARStatus` is something the player sees.** If you want
-to watch a value while debugging, print it.
+even when they look unreachable. The division is that the panel reports **what is happening right
+now** and the console reports **what went wrong once**.
 
 What each line means when you are staring at it is in
-[troubleshooting.md](troubleshooting.md).
+[troubleshooting.md](troubleshooting.md#the-debug-panel).

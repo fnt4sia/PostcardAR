@@ -251,7 +251,7 @@ once a rendered frame whether the card it belongs to is on screen, and it decide
 | Phase | Screen | Card needed | Losing it |
 |---|---|---|---|
 | `idle` | nothing | — | — |
-| `instructions` | dimmed panel, what to do, **Start** | yes | straight to `idle`, no grace |
+| `instructions` | dimmed panel, what to do, **Start** | yes | straight to `idle` after `instructionsLossTimeout`, no grace |
 | `countdown` | 3 · 2 · 1 | yes | `grace` |
 | `playing` | clock and score HUD, pieces grabbable | yes | `grace` |
 | `grace` | "point at the card again" and a countdown | it is what is being waited for | — |
@@ -267,6 +267,20 @@ nothing has started — so there is nothing worth holding, and the panel goes aw
 rather than sitting over a camera that is no longer pointed at one. `update(cardPresent:now:)`
 calls `reset()` on it directly, with no grace period and no state carried over; the next card seen
 puts the instructions back from scratch.
+
+`instructionsLossTimeout` (0.3 s) debounces that, and is the *only* softening this phase gets.
+Reacting on the first frame `cardPresent` goes false would let one dropped tracking frame — a hand
+tremor while reaching for Start — tear the button out from under a tap already in flight. It is
+short enough that the panel cannot be parked, only carried across a bad frame.
+
+**The debounce belongs here and nowhere else, and this is the trap to know about.** There was a
+second one in the coordinator: a term in the visibility latch that held the model on screen while
+`phase == .instructions`, so the lock would engage without a hand. It deadlocked, because `visible`
+is exactly what `activeCardPresent` reports back into `update(cardPresent:)` — a term true *because*
+the phase is `instructions` keeps the phase at `instructions` for ever. The card could be put down
+and walked away from and the Start panel stayed up, and `instructionsLossTimeout` was unreachable
+the whole time. Anything that softens a phase transition has to sit on the `GameSession` side of
+that call, where the answer does not feed its own input.
 
 That makes one ordering detail load-bearing in `Coordinator.updateGame(cardPresent:candidate:)`.
 `cardPresent` is worked out in the card loop that runs *before* it, back when `activeSimulationCard`

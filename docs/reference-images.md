@@ -9,15 +9,27 @@ PostcardAR/Assets.xcassets/AR Resources.arresourcegroup/
 Every image in that group is a card. The group is read whole at startup, so nothing in the
 code names an individual one — see [models.md](models.md) for the other half of the pairing.
 
+The group holds two kinds of image, and the difference is only the name:
+
+| Image named | Says | Card carries |
+|---|---|---|
+| anything not in the bundle | where a card is, nothing more | a QR naming its model |
+| after a `.usdz` in the bundle | where the card is **and** which model | nothing — the image is the name |
+
+A whole set of cards can share the first kind. The second is one image per model, and exists for a
+card whose printed artwork already *is* its model.
+
 ## Adding one
 
 In Xcode:
 
 1. Open `Assets.xcassets` and select **AR Resources**.
 2. Drag the card's image (PNG or JPG) into it.
-3. Name the entry whatever you like. **The name is not matched against anything** — it appears on
-   nowhere in the app. Which model stands on a card, and whether that card runs a
-   minigame, is decided by the QR printed on it; see [card-identity.md](card-identity.md).
+3. Name the entry whatever you like, with **one exception**: a name that happens to be a `.usdz`
+   in the bundle names that model outright, and its card then needs no QR — see
+   [card-identity.md](card-identity.md#a-card-without-a-qr-name-the-reference-image-after-the-model).
+   Any other name is matched against nothing and appears nowhere in the app; which model stands on
+   such a card, and whether it runs a minigame, is decided by the QR printed on it.
 4. In the Attributes Inspector, set the **physical size** of the printed card. For a standard A6
    postcard that is 148 × 105 mm. Xcode fills in the second dimension from the aspect ratio.
 

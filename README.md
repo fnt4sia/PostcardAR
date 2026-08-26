@@ -44,12 +44,19 @@ minigame on that card. The reference image only says *where* the card is, so sev
 share one, and nothing in the code names a card. Adding one is a model, a QR, and no code change.
 See [docs/card-identity.md](docs/card-identity.md).
 
+**Or skip the QR: name the reference image after the model.** An image whose name is a `.usdz` in
+the bundle names that model outright, and its card is printed with no code at all. Use it for a
+card whose artwork already *is* its model — `Showcase_Biorock` is the one in the set. Everything
+else about the card is unchanged.
+
 ```
 PostcardAR/
   Assets.xcassets/AR Resources.arresourcegroup/
     ref-reef.arreferenceimage                         ← where a card is; any card may use it
+    Showcase_Biorock.arreferenceimage                 ← named after a model: no QR needed
   Simulation_coral_with_drupella.usdz                 ← what appears on it, named by the QR
   Showcase_postcard.usdz
+  Showcase_Biorock.usdz
 qr/
   Simulation_coral_with_drupella.png                  ← the code to print on the card
   Showcase_postcard.png
@@ -61,7 +68,8 @@ qr/
    [docs/reference-images.md](docs/reference-images.md).
 2. **Add the image**, if this card does not reuse one already in the group. In `Assets.xcassets`,
    select **AR Resources** and drag it in. The entry's name is not matched against anything, so
-   name it for your own benefit.
+   name it for your own benefit — *unless* you want the QR-free route, in which case name it
+   exactly after the model and skip step 5.
 3. **Set the physical size** in the Attributes Inspector — measure the printed card with a ruler.
    This decides how far away the model is, and the size the card mask and floor are cut to, so
    approximately right is fine but wrong is visible.
@@ -73,11 +81,12 @@ qr/
 5. **Print a QR carrying that exact name** on the card, at error correction level H. There is a
    generated one per model in `qr/`. It can go anywhere the camera will see it — the card mask
    covers it on screen, because Vision reads the raw sensor image before anything is drawn over
-   it.
+   it. Skip this if you named the reference image after the model in step 2.
 6. Build and run.
 
-Every image in the group is tracked. One model is drawn at a time: the QR reports one name, so two
-cards in frame together bind to whichever image ARKit lists first — see
+Every image in the group is tracked. The QR reports one name at a time, so two **QR** cards in
+frame together bind to whichever image ARKit lists first. A card named by its own reference image
+has a binding of its own and is unaffected — it can be on screen alongside a QR card. See
 [docs/card-identity.md](docs/card-identity.md).
 
 ### What goes inside the model
@@ -106,6 +115,13 @@ that card's `modelWidths` entry under about 0.14 so the model fits on its floor.
 
 ### What usually goes wrong
 
+There is a **debug panel** for the camera screen, currently commented out. Switched on, it draws in
+the top right whenever a run is not on screen and reports the two halves of card identity separately
+— whether ARKit is tracking an image, and whether Vision is decoding a QR and how often — so
+"nothing appeared" resolves into which half failed. Turn it on by uncommenting every block tagged
+`DEBUG PANEL` (`grep -rn "DEBUG PANEL" PostcardAR`); they go back as a set. See
+[docs/troubleshooting.md](docs/troubleshooting.md#the-debug-panel).
+
 | Trap | Short version |
 |---|---|
 | Image will not track | ARKit needs high-contrast detail spread across the *whole* image. Flat colour, gradients, white backgrounds, and AI-upscaled images fail. Xcode's asset warnings are the authority — see [docs/reference-images.md](docs/reference-images.md). |
@@ -113,13 +129,14 @@ that card's `modelWidths` entry under about 0.14 so the model fits on its floor.
 | Camera freezes, no error | The `.usdz` brought a camera from Blender. Stripped automatically at load; see [docs/models.md](docs/models.md). |
 | Everything stutters | Model weight. Budget 512² textures and under ~50k triangles, *shared* across all cards — every model loads at launch and stays resident. |
 | A card with no `.usdz` | Tracks fine, shows nothing, and the Xcode console names the missing file. A QR naming a model that is not in the bundle says so outright. |
-| A card tracks but stays empty | Its QR is not decoding — the code is too small, too far, or too blurred. A tracked card alone never summons a model; see [docs/card-identity.md](docs/card-identity.md). |
+| A card tracks but stays empty | Its QR is not decoding — the code is too small, too far, or too blurred. A tracked card alone never summons a model; see [docs/card-identity.md](docs/card-identity.md). On a QR-free card it means the reference image's name and the `.usdz`'s name differ — check spelling and case, they are matched exactly. |
 | No minigame on a card | Either it is a showcase card — only a QR payload starting `Simulation` runs one — or the model has no `Drupella*` or `CoralPlantPoint*` entities in it, which the console says outright. |
 | Annotations do not appear | Panels start closed — tap the dot on the model to open one. If there is no dot either, the entity name in the `.usdz` and the `"entity"` in the `.json` have to match exactly; every mismatch is named in the console — see [docs/annotations.md](docs/annotations.md). |
 | A coral will not snap onto a plant point | Carry it at least `plantArmDistance` from where you grabbed it, then bring it within `plantSnapRadius` (80 screen points) of a free point on its own structure. |
 | Nothing shows where corals should go | Add a `CoralPlate_NN` to your model beside each `CoralPlantPoint_NN`. The app pulses it while the slot is free and holds it solid when a held coral is about to land there; it draws nothing itself. |
 | The run restarted from zero | The card left frame with no hand in it for more than 3 seconds. Inside 3 seconds the score and clock are held; keeping a hand in frame holds the model indefinitely. |
 | The instructions screen vanished | The card left frame. That screen has no grace period — nothing has started yet, so there is nothing to hold. Point at the card again and it comes back from the start. |
+| The instructions screen *won't* vanish | With a hand in frame, the occlusion lock holds the card as present and the panel with it — that is the lock working. With no hand it goes in ~0.3 s; if it does not, something is feeding `cardPresent` from a phase-dependent term again, see [docs/simulation.md](docs/simulation.md). |
 | The screen blurred, "Move your hand back" | Your hand is too close to the lens for the camera to make out your fingertips, so no pinch can be read. Pull back, or bring your whole hand into frame. |
 
 ## What it looks like inside
